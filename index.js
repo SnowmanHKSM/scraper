@@ -5,7 +5,7 @@ const app = express();
 
 // Rota raiz
 app.get("/", (req, res) => {
-  res.send("Bem vindo ao Scraper Google Maps");
+  res.send("Bem-vindo ao Scraper Google Maps");
 });
 
 // Rota de busca no Google Maps
@@ -41,24 +41,20 @@ app.get("/search", async (req, res) => {
     console.log(`Pesquisando: ${searchTerm}`);
 
     // Seletor para os resultados
-    const resultsSelector = `[aria-label="Resultados para ${searchTerm}"]`;
-    await page.waitForSelector(resultsSelector, { timeout: 60000 }); // Aumenta o tempo limite para o carregamento
+    const resultSelector = ".Nv2PK.THOPZb.cqNgl.Hk4XGb"; // Seleciona cada bloco de resultados
+    await page.waitForSelector(resultSelector, { timeout: 60000 }); // Aguarda o carregamento inicial
 
-    // Rolar a página até carregar todos os resultados
-    let previousHeight;
-    while (true) {
-      const resultDiv = await page.$(resultsSelector);
-      previousHeight = await page.evaluate((el) => el.scrollHeight, resultDiv);
-      await page.evaluate((el) => el.scrollBy(0, el.scrollHeight), resultDiv);
-      await new Promise((resolve) => setTimeout(resolve, 6000)); // Aguarda 6 segundos entre as rolagens
-      const newHeight = await page.evaluate((el) => el.scrollHeight, resultDiv);
-      if (newHeight === previousHeight) break; // Sai do loop se não houver mais resultados
-    }
+    // Extrair informações dos resultados
+    const results = await page.evaluate(() => {
+      const elements = document.querySelectorAll(".Nv2PK.THOPZb.cqNgl.Hk4XGb");
+      return Array.from(elements).map((el) => {
+        const name = el.querySelector(".qBF1Pd.fontHeadlineSmall")?.textContent || "Nome não encontrado";
+        const address = el.querySelector(".W4Efsd")?.textContent || "Endereço não encontrado";
+        const phone = el.querySelector("[data-tooltip='Copiar número de telefone']")?.textContent || "Telefone não encontrado";
+        const website = el.querySelector("[data-value='Website']")?.href || "Site não encontrado";
 
-    // Extrair os websites dos resultados
-    const websites = await page.evaluate(() => {
-      const elements = document.querySelectorAll('[data-value="Website"]');
-      return Array.from(elements).map((el) => el.getAttribute("href"));
+        return { name, address, phone, website };
+      });
     });
 
     await browser.close();
@@ -66,7 +62,7 @@ app.get("/search", async (req, res) => {
     // Retorna os resultados como JSON
     return res.json({
       term: searchTerm,
-      websites,
+      results,
     });
   } catch (error) {
     console.error("Erro ao realizar a pesquisa:", error);
