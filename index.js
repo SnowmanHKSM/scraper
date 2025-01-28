@@ -154,9 +154,9 @@ app.get("/search", async (req, res) => {
             .trim();
         }
 
-        // Telefone - procura primeiro no botão específico
+        // Telefone - usando o seletor data-item-id
         let phone = "Telefone não encontrado";
-        const phoneButton = el.querySelector('button.CsEnBe[data-tooltip="Copiar número de telefone"]');
+        const phoneButton = el.querySelector('button[data-item-id*="phone"]');
         if (phoneButton) {
           const phoneDiv = phoneButton.querySelector('.Io6YTe.fontBodyMedium');
           if (phoneDiv) {
@@ -176,42 +176,6 @@ app.get("/search", async (req, res) => {
                   cleanPhone.slice(8, 12)        // Segunda parte
                 ];
                 phone = `${parts[0]} ${parts[1]} ${parts[2]}-${parts[3]}`;
-              }
-            }
-          }
-        }
-
-        // Se não encontrou no botão, tenta encontrar em outros lugares
-        if (phone === "Telefone não encontrado") {
-          const phonePatterns = [
-            // Procura por números com +55 ou (DD)
-            (text) => /(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}/.test(text)
-          ];
-
-          for (const pattern of phonePatterns) {
-            const phoneText = findTextByPattern(el, (text) => {
-              return pattern(text) &&
-                     !text.includes('reviews') &&
-                     !text.includes('avaliações');
-            });
-
-            if (phoneText) {
-              const numberMatch = phoneText.match(/(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}/);
-              if (numberMatch) {
-                const cleanPhone = numberMatch[0]
-                  .replace(/[^\d]/g, '')  // Remove tudo exceto números
-                  .replace(/^(?!55)/, '55');  // Adiciona 55 se não existir
-                
-                if (cleanPhone.length >= 11) {
-                  const parts = [
-                    '+' + cleanPhone.slice(0, 2),  // +55
-                    cleanPhone.slice(2, 4),        // DDD
-                    cleanPhone.slice(4, 8),        // Primeira parte
-                    cleanPhone.slice(8, 12)        // Segunda parte
-                  ];
-                  phone = `${parts[0]} ${parts[1]} ${parts[2]}-${parts[3]}`;
-                  break;
-                }
               }
             }
           }
