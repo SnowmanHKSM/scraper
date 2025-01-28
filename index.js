@@ -90,7 +90,6 @@ app.get("/search", async (req, res) => {
     }
 
     const results = [];
-    let processedItems = new Set();
 
     async function processVisibleCards() {
       const cards = await page.$$(".Nv2PK");
@@ -98,31 +97,6 @@ app.get("/search", async (req, res) => {
 
       for (let i = 0; i < cards.length && results.length < maxResults; i++) {
         try {
-          // Verifica se o card ainda está válido
-          const isValid = await cards[i].evaluate(node => node.isConnected);
-          if (!isValid) {
-            logWithTime(`Card ${i} não está mais válido, pulando...`);
-            continue;
-          }
-
-          // Extrai um identificador único do card
-          const cardData = await cards[i].evaluate(el => {
-            const nameEl = el.querySelector(".qBF1Pd");
-            const addressEl = el.querySelector(".W4Efsd:last-child");
-            return {
-              name: nameEl ? nameEl.textContent.trim() : '',
-              address: addressEl ? addressEl.textContent.trim() : ''
-            };
-          });
-
-          const cardId = `${cardData.name}-${cardData.address}`;
-
-          // Verifica se já processamos este card
-          if (processedItems.has(cardId)) {
-            logWithTime(`Card ${i} (${cardData.name}) já foi processado, pulando...`);
-            continue;
-          }
-
           // Rola até o card
           await page.evaluate((card) => {
             card.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -130,58 +104,84 @@ app.get("/search", async (req, res) => {
           
           await sleep(1000);
 
-          // Tenta clicar no card
+          // Tenta clicar no card com múltiplas estratégias
+          let clicked = false;
           try {
             await cards[i].click();
+            clicked = true;
           } catch (error) {
-            logWithTime(`Erro ao clicar no card ${i}, tentando novamente...`);
-            await sleep(1000);
             try {
               await page.evaluate(card => card.click(), cards[i]);
-            } catch (retryError) {
-              throw new Error(`Não foi possível clicar no card após retry`);
+              clicked = true;
+            } catch (error2) {
+              try {
+                const selector = await cards[i].evaluate(el => {
+                  const link = el.querySelector('a');
+                  return link ? link.href : null;
+                });
+                if (selector) {
+                  await page.goto(selector, { waitUntil: 'networkidle0' });
+                  clicked = true;
+                }
+              } catch (error3) {
+                throw new Error('Não foi possível clicar no card de nenhuma forma');
+              }
             }
           }
 
-          await page.waitForSelector("h1.DUwDvf", { timeout: 5000 });
+          if (!clicked) {
+            continue;
+          }
 
-          // Captura os detalhes
+          // Espera os detalhes carregarem
+          await Promise.race([
+            page.waitForSelector("h1.DUwDvf", { timeout: 5000 }),
+            page.waitForSelector("h1.fontHeadlineLarge", { timeout: 5000 })
+          ]);
+
+          // Captura os detalhes com múltiplos seletores
           const details = await page.evaluate(() => {
-            const getTextContent = (selector) => {
-              const element = document.querySelector(selector);
-              return element ? element.textContent.trim() : null;
+            const getTextContent = (selectors) => {
+              for (const selector of selectors) {
+                const element = document.querySelector(selector);
+                if (element) {
+                  return element.textContent.trim();
+                }
+              }
+              return null;
             };
 
-            const name = getTextContent("h1.DUwDvf") || "Nome não encontrado";
-            const address = document.querySelector('button[data-item-id*="address"]')?.textContent?.trim() || 
-                           document.querySelector('div[data-item-id*="address"]')?.textContent?.trim() ||
-                           "Endereço não encontrado";
+            const name = getTextContent([
+              "h1.DUwDvf",
+              "h1.fontHeadlineLarge",
+              ".DUwDvf"
+            ]) || "Nome não encontrado";
+
+            const address = getTextContent([
+              'button[data-item-id*="address"]',
+              'div[data-item-id*="address"]',
+              '.rogA2c',
+              '.address'
+            ]) || "Endereço não encontrado";
             
-            const phone = document.querySelector('button[data-item-id^="phone"]')?.getAttribute("aria-label")?.replace("Telefone: ", "")?.trim() || 
-                         document.querySelector('div[data-item-id^="phone"]')?.textContent?.trim() ||
-                         "Telefone não encontrado";
+            const phone = getTextContent([
+              'button[data-item-id^="phone"]',
+              'div[data-item-id^="phone"]',
+              '.phone'
+            ]) || "Telefone não encontrado";
+
+            const websiteElement = 
+              document.querySelector('a[data-item-id*="authority"]') ||
+              document.querySelector('a[data-item-id*="website"]') ||
+              document.querySelector('a[data-tooltip="Abrir site"]');
             
-            const website = document.querySelector('a[data-item-id*="authority"]')?.href || 
-                           document.querySelector('a[data-item-id*="website"]')?.href ||
-                           "Site não encontrado";
+            const website = websiteElement ? websiteElement.href : "Site não encontrado";
 
             return { name, address, phone, website };
           });
 
-          // Adiciona apenas se não existir um resultado igual
-          const isDuplicate = results.some(r => 
-            r.name === details.name && 
-            r.address === details.address && 
-            r.phone === details.phone
-          );
-
-          if (!isDuplicate) {
-            logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
-            results.push(details);
-            processedItems.add(cardId);
-          } else {
-            logWithTime(`Resultado duplicado encontrado para ${details.name}, pulando...`);
-          }
+          logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
+          results.push(details);
 
           // Volta para a lista
           await page.goBack({ waitUntil: "networkidle0" });
@@ -197,6 +197,8 @@ app.get("/search", async (req, res) => {
             }
           } catch (navError) {
             logWithTime(`Erro ao navegar de volta: ${navError.message}`);
+            // Tenta recarregar a página em caso de erro
+            await page.reload({ waitUntil: "networkidle0" });
           }
         }
 
@@ -205,7 +207,7 @@ app.get("/search", async (req, res) => {
     }
 
     async function scrollPage() {
-      const scrollResult = await page.evaluate(() => {
+      return await page.evaluate(() => {
         const container = document.querySelector('div[role="feed"]');
         if (container) {
           const previousHeight = container.scrollHeight;
@@ -217,9 +219,6 @@ app.get("/search", async (req, res) => {
         }
         return { success: false };
       });
-      
-      await sleep(2000);
-      return scrollResult;
     }
 
     // Loop principal: rola e processa
