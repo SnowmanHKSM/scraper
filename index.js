@@ -48,7 +48,7 @@ app.get("/search", async (req, res) => {
 
     while (attempts < maxAttempts) {
       await page.evaluate((div) => div.scrollTo(0, div.scrollHeight), scrollableDiv);
-      await page.waitForTimeout(3000);
+      await new Promise((resolve) => setTimeout(resolve, 3000)); // Substituição do waitForTimeout
 
       const currentResultsCount = await page.evaluate(
         () => document.querySelectorAll("div.Nv2PK").length
@@ -72,19 +72,19 @@ app.get("/search", async (req, res) => {
         const reviews =
           listing.querySelector(".UY7F9")?.textContent.trim() || "Sem avaliações";
 
-        const address = document
+        const address = listing
           .querySelector('button[data-item-id="address"]')
           ?.getAttribute("aria-label")
           ?.replace(/^Endereço:\s*/, "")
           ?.trim() || "Endereço não disponível";
 
-        const phone = document
+        const phone = listing
           .querySelector('button[data-item-id="phone"]')
           ?.getAttribute("aria-label")
           ?.replace(/^Telefone:\s*/, "")
           ?.trim() || "Telefone não disponível";
 
-        const website = document
+        const website = listing
           .querySelector('a[href^="http"][aria-label^="Visitar site"]')
           ?.href || "Site não disponível";
 
