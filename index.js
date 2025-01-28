@@ -7,6 +7,66 @@ const app = express();
 const RATE_LIMIT_DELAY = 2000;
 const MAX_RETRIES = 3;
 
+// Configurações para aumentar o timeout
+const SERVER_TIMEOUT = 10 * 60 * 1000; // 10 minutos
+
+// Variáveis globais para o navegador e página
+let globalBrowser = null;
+let isSearching = false;
+
+// Função para inicializar o navegador
+async function initBrowser() {
+  if (!globalBrowser) {
+    logWithTime("Iniciando navegador...");
+    globalBrowser = await puppeteer.launch({
+      headless: "new",
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-accelerated-2d-canvas",
+        "--disable-gpu",
+        "--window-size=1920x1080",
+      ],
+    });
+  }
+  return globalBrowser;
+}
+
+// Função para limpar recursos
+async function cleanup() {
+  if (globalBrowser) {
+    try {
+      await globalBrowser.close();
+    } catch (error) {
+      logWithTime(`Erro ao fechar navegador: ${error.message}`);
+    }
+    globalBrowser = null;
+  }
+  isSearching = false;
+}
+
+// Configurar limpeza ao encerrar
+process.on('SIGINT', cleanup);
+process.on('SIGTERM', cleanup);
+
+// Configurar timeouts do servidor
+app.use((req, res, next) => {
+  res.setTimeout(SERVER_TIMEOUT, () => {
+    logWithTime('Requisição ainda em processamento...');
+  });
+  
+  // Configurar headers para CORS e keep-alive
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Keep-Alive', 'timeout=' + Math.floor(SERVER_TIMEOUT/1000));
+  
+  next();
+});
+
 function getTimestamp() {
   return new Date().toLocaleTimeString("pt-BR");
 }
@@ -21,7 +81,21 @@ app.get("/", (req, res) => {
   res.send("Bem-vindo ao Scraper Google Maps");
 });
 
+// Rota de status para healthcheck
+app.get("/status", (req, res) => {
+  res.json({ 
+    status: "ok", 
+    timestamp: new Date().toISOString(),
+    browserActive: !!globalBrowser,
+    isSearching: isSearching
+  });
+});
+
 app.get("/search", async (req, res) => {
+  if (isSearching) {
+    return res.status(429).json({ error: "Já existe uma busca em andamento. Tente novamente em alguns minutos." });
+  }
+
   const searchTerm = req.query.term;
   const maxResults = parseInt(req.query.max) || 100;
 
@@ -29,26 +103,21 @@ app.get("/search", async (req, res) => {
     return res.status(400).json({ error: "O parâmetro 'term' é obrigatório." });
   }
 
-  let browser;
+  // Enviar cabeçalho inicial para manter a conexão viva
+  res.writeHead(200, {
+    'Content-Type': 'application/json',
+    'Transfer-Encoding': 'chunked',
+    'Connection': 'keep-alive'
+  });
+
+  isSearching = true;
+  let page;
 
   try {
     logWithTime(`Iniciando nova busca por: ${searchTerm}`);
-    logWithTime("Iniciando navegador...");
-
-    browser = await puppeteer.launch({
-      headless: "new",
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-accelerated-2d-canvas",
-        "--disable-gpu",
-        "--window-size=1920x1080",
-      ],
-    });
-
-    const page = await browser.newPage();
+    
+    const browser = await initBrowser();
+    page = await browser.newPage();
     await page.setViewport({ width: 1920, height: 1080 });
     
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
@@ -309,21 +378,50 @@ app.get("/search", async (req, res) => {
     }
 
     logWithTime(`Busca finalizada. Total de resultados: ${results.length}`);
-    await browser.close();
-    logWithTime("Navegador fechado com sucesso");
-
-    return res.json({
+    isSearching = false;
+    return res.end(JSON.stringify({
       total: results.length,
       results: results
-    });
+    }));
 
   } catch (error) {
     logWithTime(`Erro durante a execução: ${error.message}`);
-    if (browser) {
-      await browser.close();
-      logWithTime("Navegador fechado após erro");
+    isSearching = false;
+    
+    if (page) {
+      try {
+        await page.close();
+      } catch (e) {
+        logWithTime(`Erro ao fechar página: ${e.message}`);
+      }
     }
-    return res.status(500).json({ error: error.message });
+    
+    // Se os headers ainda não foram enviados, envia uma resposta de erro
+    if (!res.headersSent) {
+      return res.status(500).json({ error: error.message });
+    } else {
+      // Se os headers já foram enviados, termina a resposta com o erro
+      return res.end(JSON.stringify({ error: error.message }));
+    }
+  } finally {
+    if (page) {
+      try {
+        await page.close();
+      } catch (e) {
+        logWithTime(`Erro ao fechar página: ${e.message}`);
+      }
+    }
+  }
+});
+
+// Rota para reiniciar o navegador se necessário
+app.post("/reset", async (req, res) => {
+  try {
+    await cleanup();
+    await initBrowser();
+    res.json({ status: "ok", message: "Navegador reiniciado com sucesso" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -332,9 +430,25 @@ if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   const HOST = '0.0.0.0';
   
-  app.listen(PORT, HOST, () => {
+  const server = app.listen(PORT, HOST, async () => {
     console.log(`Servidor rodando em http://${HOST}:${PORT}`);
     console.log(`Para fazer uma busca, acesse: http://${HOST}:${PORT}/search?term=sua+busca`);
+    
+    // Inicializa o navegador ao iniciar o servidor
+    try {
+      await initBrowser();
+      console.log('Navegador inicializado com sucesso');
+    } catch (error) {
+      console.error('Erro ao inicializar navegador:', error);
+    }
+  });
+
+  // Configurar timeout do servidor
+  server.timeout = SERVER_TIMEOUT;
+  
+  // Tratamento de erros do servidor
+  server.on('error', (error) => {
+    console.error('Erro no servidor:', error);
   });
 }
 
