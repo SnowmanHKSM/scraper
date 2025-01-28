@@ -140,51 +140,15 @@ app.get("/search", async (req, res) => {
           }
         }
 
-        // Telefone - Nova implementação
+        // Telefone - Usando data-item-id com phone:tel
         let phone = "Telefone não encontrado";
-        const phoneButton = el.querySelector('button[data-item-id^="phone"]');
+        const phoneButton = el.querySelector('button[data-item-id*="phone:tel"]');
         if (phoneButton) {
-          const phoneText = phoneButton.getAttribute("aria-label");
-          if (phoneText) {
-            phone = phoneText.replace(/^Telefone:\s*/, "").trim();
-            
-            // Se encontrou o telefone, formata ele
-            if (phone !== "Telefone não encontrado") {
-              const numbers = phone.replace(/[^\d]/g, '');
-              if (numbers.length >= 10) {
-                const formatted = numbers.replace(/^(?!55)/, '55')
-                                       .replace(/^55(\d{2})(\d{4,5})(\d{4})$/, '+55 $1 $2-$3');
-                if (formatted.length >= 16) {
-                  phone = formatted;
-                }
-              }
-            }
-          }
-        }
-
-        // Se não encontrou pelo método principal, tenta pelos métodos alternativos
-        if (phone === "Telefone não encontrado") {
-          const phoneElements = [
-            ...el.querySelectorAll('button[data-tooltip*="Ligar"]'),
-            ...el.querySelectorAll('button[aria-label*="telefone"]'),
-            ...el.querySelectorAll('[data-item-id*="phone"]')
-          ];
-
-          for (const phoneEl of phoneElements) {
-            let phoneText = phoneEl.getAttribute('aria-label') || 
-                           phoneEl.getAttribute('data-item-id') || 
-                           phoneEl.textContent;
-            
-            if (phoneText) {
-              const numbers = phoneText.replace(/[^\d]/g, '');
-              if (numbers.length >= 10) {
-                const formatted = numbers.replace(/^(?!55)/, '55')
-                                       .replace(/^55(\d{2})(\d{4,5})(\d{4})$/, '+55 $1 $2-$3');
-                if (formatted.length >= 16) {
-                  phone = formatted;
-                  break;
-                }
-              }
+          const phoneId = phoneButton.getAttribute('data-item-id');
+          if (phoneId) {
+            const phoneNumber = phoneId.split('phone:tel:')[1];
+            if (phoneNumber) {
+              phone = phoneNumber;
             }
           }
         }
