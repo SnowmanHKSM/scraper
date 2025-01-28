@@ -121,66 +121,109 @@ app.get("/search", async (req, res) => {
         
         // Endereço - tenta vários seletores diferentes
         let address = "Endereço não encontrado";
-        const addressSelectors = [
-          '.W4Efsd:nth-child(1)', // Primeiro elemento com classe W4Efsd
-          'button[data-item-id="address"]', // Botão específico de endereço
-          '[data-tooltip]', // Elementos com tooltip
-          '.W4Efsd > div' // Divs diretos dentro de W4Efsd
-        ];
         
-        for (const selector of addressSelectors) {
-          const addressElement = el.querySelector(selector);
-          if (addressElement) {
-            const addressText = addressElement.textContent.trim();
-            // Verifica se o texto não contém telefone ou horário
-            if (addressText && 
-                !addressText.includes("+55") && 
-                !addressText.includes("Fechado") && 
-                !addressText.includes("Aberto") && 
-                !addressText.includes("Abre")) {
-              // Remove o tipo do estabelecimento e limpa o endereço
-              let cleanAddress = addressText
-                .split("·") // Divide por ·
-                .map(part => part.trim()) // Remove espaços
-                .filter(part => 
-                  !part.includes("Pet Shop") && 
-                  !part.includes("Veterinário") && 
-                  !part.includes("Pet store") &&
-                  part !== "" && 
-                  !part.includes("Compras na loja")
-                ) // Remove tipos de estabelecimento
-                .filter(part => part.length > 0) // Remove partes vazias
-                .join(" · ") // Junta novamente com ·
-                .trim(); // Remove espaços extras
-              
-              // Remove qualquer ponto ou espaço no início
-              cleanAddress = cleanAddress.replace(/^[·\s]+/, '');
-              
-              // Se ainda houver conteúdo após a limpeza
-              if (cleanAddress && cleanAddress.length > 0) {
-                address = cleanAddress;
+        // Primeiro tenta pegar o endereço completo do botão de endereço
+        const addressButton = el.querySelector('button[data-item-id="address"]');
+        if (addressButton) {
+          const fullAddress = addressButton.getAttribute('aria-label');
+          if (fullAddress) {
+            address = fullAddress.replace(/^Endereço:\s*/, '').trim();
+          }
+        }
+        
+        // Se não encontrou no botão, tenta outros seletores
+        if (address === "Endereço não encontrado") {
+          const addressSelectors = [
+            '.W4Efsd:nth-child(1)',
+            '[data-tooltip]',
+            '.W4Efsd > div'
+          ];
+          
+          for (const selector of addressSelectors) {
+            const addressElement = el.querySelector(selector);
+            if (addressElement) {
+              const addressText = addressElement.textContent.trim();
+              if (addressText && 
+                  !addressText.includes("+55") && 
+                  !addressText.includes("Fechado") && 
+                  !addressText.includes("Aberto") && 
+                  !addressText.includes("Abre")) {
+                let cleanAddress = addressText
+                  .split("·")
+                  .map(part => part.trim())
+                  .filter(part => 
+                    !part.includes("Pet Shop") && 
+                    !part.includes("Veterinário") && 
+                    !part.includes("Pet store") &&
+                    !part.includes("Barbearia") &&
+                    part !== "" && 
+                    !part.includes("Compras na loja")
+                  )
+                  .filter(part => part.length > 0)
+                  .join(" · ")
+                  .trim()
+                  .replace(/^[·\s]+/, '');
+                
+                if (cleanAddress && cleanAddress.length > 0) {
+                  address = cleanAddress;
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        // Telefone - tenta vários seletores
+        let phone = "Telefone não encontrado";
+        const phoneSelectors = [
+          'button[data-tooltip*="Ligar"]',
+          'button[data-item-id*="phone"]',
+          '[data-tooltip*="Ligar"]',
+          'a[data-tooltip*="Ligar"]'
+        ];
+
+        for (const selector of phoneSelectors) {
+          const phoneElement = el.querySelector(selector);
+          if (phoneElement) {
+            const phoneText = phoneElement.getAttribute('aria-label') || phoneElement.textContent;
+            if (phoneText) {
+              const phoneMatch = phoneText.match(/(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}-?\d{4}/);
+              if (phoneMatch) {
+                phone = phoneMatch[0].trim();
+                if (!phone.startsWith('+55')) {
+                  phone = '+55 ' + phone;
+                }
                 break;
               }
             }
           }
         }
 
-        // Telefone - procura em todos os elementos de texto
-        let phone = "Telefone não encontrado";
-        const allElements = el.querySelectorAll('*');
-        for (const element of allElements) {
-          const text = element.textContent.trim();
-          if (text.includes("+55")) {
-            // Extrai apenas o número do telefone usando regex
-            const phoneMatch = text.match(/\+55\s+\d{2}\s*\d{4,5}-\d{4}/);
-            if (phoneMatch) {
-              phone = phoneMatch[0].trim();
+        // Website - tenta vários seletores
+        let website = "Site não encontrado";
+        const websiteSelectors = [
+          'a[data-tooltip*="site"]',
+          'a[data-item-id*="authority"]',
+          'button[data-item-id*="authority"]',
+          'a[href*="http"]'
+        ];
+
+        for (const selector of websiteSelectors) {
+          const websiteElement = el.querySelector(selector);
+          if (websiteElement) {
+            const href = websiteElement.href || websiteElement.getAttribute('data-url');
+            if (href && !href.includes('google.com')) {
+              website = href;
               break;
             }
           }
         }
         
-        // Horário de funcionamento
+        // Avaliação e reviews
+        const rating = el.querySelector(".MW4etd")?.textContent.trim() || "Sem avaliação";
+        const reviews = el.querySelector(".UY7F9")?.textContent.replace(/[()]/g, "").trim() || "0";
+
+        // Horário
         let hours = "Horário não disponível";
         const hoursElement = el.querySelector('[data-tooltip*="Horário"]') || 
                            el.querySelector('.W4Efsd:nth-child(2)');
@@ -202,19 +245,6 @@ app.get("/search", async (req, res) => {
             }
           }
         }
-        
-        // Site
-        let website = "Site não encontrado";
-        const websiteElement = el.querySelector('a[data-tooltip*="site"]') || 
-                             el.querySelector('a[data-item-id*="authority"]') ||
-                             el.querySelector('a[data-item-id="authority"]');
-        if (websiteElement && websiteElement.href) {
-          website = websiteElement.href;
-        }
-        
-        // Avaliação e reviews
-        const rating = el.querySelector(".MW4etd")?.textContent.trim() || "Sem avaliação";
-        const reviews = el.querySelector(".UY7F9")?.textContent.replace(/[()]/g, "").trim() || "0";
 
         return {
           name,
