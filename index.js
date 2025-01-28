@@ -119,38 +119,66 @@ app.get("/search", async (req, res) => {
         // Nome do estabelecimento
         const name = el.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não encontrado";
         
-        // Endereço completo para parsing
-        const addressFull = el.querySelector('.W4Efsd:nth-child(2)')?.textContent.trim() || "";
-        
-        // Separar os componentes do endereço
+        // Endereço - tenta vários seletores diferentes
         let address = "Endereço não encontrado";
-        let phone = "Telefone não encontrado";
-        let hours = "Horário não disponível";
+        const addressSelectors = [
+          '.W4Efsd:nth-child(1)', // Primeiro elemento com classe W4Efsd
+          'button[data-item-id="address"]', // Botão específico de endereço
+          '[data-tooltip]:not(button)', // Elementos com tooltip que não são botões
+          '.W4Efsd div:not([class])', // Divs sem classe dentro de W4Efsd
+        ];
         
-        if (addressFull) {
-          // Separa os componentes por ·
-          const parts = addressFull.split("·").map(p => p.trim());
-          
-          parts.forEach(part => {
-            if (part.includes("+55")) {
-              phone = part.trim();
-            } else if (part.includes("Fechado") || part.includes("Aberto") || part.includes("Abre")) {
-              hours = part.trim();
-            } else {
-              // Se não é telefone nem horário, é endereço
-              if (part && part !== "Fechado" && part !== "Aberto") {
-                address = part.trim();
-              }
+        for (const selector of addressSelectors) {
+          const addressElement = el.querySelector(selector);
+          if (addressElement) {
+            const addressText = addressElement.textContent.trim();
+            // Verifica se o texto não contém telefone ou horário
+            if (addressText && 
+                !addressText.includes("+55") && 
+                !addressText.includes("Fechado") && 
+                !addressText.includes("Aberto") && 
+                !addressText.includes("Abre")) {
+              address = addressText;
+              break;
             }
-          });
+          }
         }
         
-        // Tenta pegar o telefone de outras formas se não encontrou
-        if (phone === "Telefone não encontrado") {
-          const phoneElement = el.querySelector('button[data-tooltip*="("]') || 
-                             el.querySelector('button[data-item-id*="phone"]');
+        // Telefone
+        let phone = "Telefone não encontrado";
+        const phoneSelectors = [
+          'button[data-tooltip*="("]',
+          'button[data-item-id*="phone"]',
+          '.W4Efsd span:contains("+55")',
+          '[data-tooltip*="+55"]'
+        ];
+        
+        for (const selector of phoneSelectors) {
+          const phoneElement = el.querySelector(selector);
           if (phoneElement) {
-            phone = phoneElement.textContent.trim();
+            const phoneText = phoneElement.textContent.trim();
+            if (phoneText.includes("+55")) {
+              phone = phoneText;
+              break;
+            }
+          }
+        }
+        
+        // Horário de funcionamento
+        let hours = "Horário não disponível";
+        const hoursElement = el.querySelector('[data-tooltip*="Horário"]') || 
+                           el.querySelector('.W4Efsd:nth-child(2)');
+        
+        if (hoursElement) {
+          const hoursText = hoursElement.textContent.trim();
+          if (hoursText.includes("Fechado") || 
+              hoursText.includes("Aberto") || 
+              hoursText.includes("Abre")) {
+            hours = hoursText.split("·")
+                            .find(part => part.includes("Fechado") || 
+                                        part.includes("Aberto") || 
+                                        part.includes("Abre"))
+                            ?.trim() || hours;
           }
         }
         
@@ -163,7 +191,7 @@ app.get("/search", async (req, res) => {
           website = websiteElement.href;
         }
         
-        // Avaliação e número de reviews
+        // Avaliação e reviews
         const rating = el.querySelector(".MW4etd")?.textContent.trim() || "Sem avaliação";
         const reviews = el.querySelector(".UY7F9")?.textContent.replace(/[()]/g, "").trim() || "0";
 
