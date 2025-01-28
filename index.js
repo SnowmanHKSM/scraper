@@ -148,72 +148,76 @@ app.get("/search", async (req, res) => {
               return "Endereço não encontrado";
             });
 
-            // Telefone - Tenta pegar direto da lista primeiro
+            // Telefone - Nova implementação
             let phone = "Telefone não encontrado";
             try {
-              // Tenta pegar o telefone diretamente da lista
-              const directPhone = await el.$eval('[data-tooltip*="Copiar número"], [aria-label*="Telefone"], [data-item-id*="phone"], .rogA2c', e => {
-                const tooltip = e.getAttribute('data-tooltip');
-                if (tooltip && tooltip.includes('Copiar número')) {
-                  return tooltip.replace('Copiar número de telefone: ', '').trim();
-                }
-                
-                const ariaLabel = e.getAttribute('aria-label');
-                if (ariaLabel && (ariaLabel.includes('Telefone') || ariaLabel.includes('telefone'))) {
-                  return ariaLabel.replace(/Telefone:?\s*/i, '').trim();
-                }
-                
-                const itemId = e.getAttribute('data-item-id');
-                if (itemId && itemId.includes('phone:tel:')) {
-                  return itemId.split('phone:tel:')[1].trim();
-                }
-                
-                return e.textContent.trim();
-              }).catch(() => null);
+              // Clica no item para abrir detalhes
+              await el.click();
+              await page.waitForSelector('div[role="dialog"]', { timeout: 2000 });
 
-              if (directPhone) {
-                phone = directPhone;
-              } else {
-                // Se não achou direto, tenta abrir o painel
-                await el.click();
-                await page.waitForSelector('div[role="dialog"]', { timeout: 2000 });
-                
-                // Tenta pegar o telefone do painel
-                const panelPhone = await page.$eval('button[data-tooltip*="Copiar número"], button[aria-label*="Telefone"], button[data-item-id*="phone"], .rogA2c', e => {
-                  const tooltip = e.getAttribute('data-tooltip');
-                  if (tooltip && tooltip.includes('Copiar número')) {
-                    return tooltip.replace('Copiar número de telefone: ', '').trim();
-                  }
-                  
-                  const ariaLabel = e.getAttribute('aria-label');
-                  if (ariaLabel && (ariaLabel.includes('Telefone') || ariaLabel.includes('telefone'))) {
-                    return ariaLabel.replace(/Telefone:?\s*/i, '').trim();
-                  }
-                  
-                  const itemId = e.getAttribute('data-item-id');
-                  if (itemId && itemId.includes('phone:tel:')) {
-                    return itemId.split('phone:tel:')[1].trim();
-                  }
-                  
-                  return e.textContent.trim();
-                }).catch(() => null);
+              // Espera um momento para o conteúdo carregar
+              await new Promise(resolve => setTimeout(resolve, 500));
 
-                if (panelPhone) {
-                  phone = panelPhone;
+              // Primeiro tenta pegar o número do atributo data-item-id que contém o número real
+              const phoneElement = await page.$('[data-item-id*="phone:tel:"]');
+              if (phoneElement) {
+                const itemId = await phoneElement.evaluate(el => el.getAttribute('data-item-id'));
+                if (itemId) {
+                  phone = itemId.split('phone:tel:')[1];
                 }
-
-                // Fecha o painel
-                await page.keyboard.press('Escape');
               }
 
-              // Se encontrou um número, formata ele
-              if (phone && phone !== "Telefone não encontrado") {
+              // Se não encontrou, tenta clicar no botão de copiar e pegar do clipboard
+              if (!phone || phone === "Telefone não encontrado") {
+                const copyButton = await page.$('button[data-tooltip*="Copiar número"]');
+                if (copyButton) {
+                  await copyButton.click();
+                  await new Promise(resolve => setTimeout(resolve, 200));
+                  
+                  // Tenta pegar o número que foi copiado para o clipboard
+                  const ariaLabel = await copyButton.evaluate(el => el.getAttribute('aria-label'));
+                  if (ariaLabel) {
+                    phone = ariaLabel.replace(/Telefone:?\s*/i, '').trim();
+                  }
+                }
+              }
+
+              // Se ainda não encontrou, tenta outros métodos
+              if (!phone || phone === "Telefone não encontrado" || phone === "Copiar número de telefone") {
+                const alternativeElement = await page.$('button[aria-label*="Telefone"], .rogA2c');
+                if (alternativeElement) {
+                  const text = await alternativeElement.evaluate(el => {
+                    const ariaLabel = el.getAttribute('aria-label');
+                    if (ariaLabel && ariaLabel.includes('Telefone')) {
+                      return ariaLabel.replace(/Telefone:?\s*/i, '').trim();
+                    }
+                    return el.textContent.trim();
+                  });
+                  if (text && text !== "Copiar número de telefone") {
+                    phone = text;
+                  }
+                }
+              }
+
+              // Fecha o painel
+              await page.keyboard.press('Escape');
+
+              // Formata o número se encontrou
+              if (phone && phone !== "Telefone não encontrado" && phone !== "Copiar número de telefone") {
                 const numbers = phone.replace(/[^\d+]/g, '');
                 if (numbers.length >= 8) {
-                  phone = numbers.replace(/^(?!55|\+55)/, '55')
-                               .replace(/^(?!\+)/, '+')
-                               .replace(/^(\+55)(\d{2})(\d{4,5})(\d{4})$/, '$1 $2 $3-$4');
+                  // Remove o 0 depois do 55 se existir
+                  const cleanNumber = numbers.replace(/^(?:55|)\s*0+/, '55');
+                  
+                  phone = cleanNumber
+                    .replace(/^(?!55|\+55)/, '55')  // Adiciona 55 se não existir
+                    .replace(/^(?!\+)/, '+')       // Adiciona + se não existir
+                    .replace(/^(\+55)(\d{2})(\d{4,5})(\d{4})$/, '$1 $2 $3-$4'); // Formata
+                } else {
+                  phone = "Telefone não encontrado";
                 }
+              } else {
+                phone = "Telefone não encontrado";
               }
             } catch (error) {
               console.error('Erro ao pegar telefone:', error);
