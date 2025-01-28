@@ -31,12 +31,14 @@ app.get("/search", async (req, res) => {
     logWithTime("Iniciando navegador...");
     
     const browser = await puppeteer.launch({
-      headless: "new",
+      headless: true,
       args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--lang=pt-BR",
-        "--start-maximized"
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--window-size=1920x1080'
       ],
     });
 

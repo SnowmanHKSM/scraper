@@ -27,8 +27,9 @@ RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add
     rm -rf /var/lib/apt/lists/*
 
 # Variáveis de ambiente para o Puppeteer
-ENV PUPPETEER_SKIP_DOWNLOAD true
-ENV PUPPETEER_EXECUTABLE_PATH /usr/bin/google-chrome
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
+ENV PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage
 
 # Configurar diretório de trabalho
 WORKDIR /app
@@ -43,4 +44,4 @@ RUN npm install
 EXPOSE 3000
 
 # Comando de inicialização
-CMD ["npm", "start"]
+CMD ["node", "index.js"]
