@@ -114,109 +114,103 @@ app.get("/search", async (req, res) => {
     }
 
     logWithTime(`Iniciando extração de dados de ${previousResultCount} resultados...`);
-    
-    // Extrair os dados dos resultados em lotes
+    // Extrair os dados dos resultados
     const results = [];
     const elements = await page.$$('.Nv2PK');
-    const batchSize = 10; // Processa 10 itens por vez
     
-    for (let i = 0; i < elements.length; i += batchSize) {
-      const batch = elements.slice(i, i + batchSize);
-      console.log(`Processando lote ${Math.floor(i/batchSize) + 1}/${Math.ceil(elements.length/batchSize)} (${i+1} até ${Math.min(i+batchSize, elements.length)} de ${elements.length})`);
-      
-      for (const el of batch) {
-        try {
-          // Nome
-          const name = await el.$eval("h3.fontHeadlineSmall, .qBF1Pd", e => e ? e.textContent.trim() : "Nome não encontrado")
-            .catch(() => "Nome não encontrado");
-          
-          // Endereço
-          const address = await el.$eval('button[data-item-id*="address"], div[class*="fontBodyMedium"]', e => {
-            const fullText = e.textContent.trim();
-            const parts = fullText.split(/(?:Fechado|Aberto|⋅)/);
-            if (parts.length > 0) {
-              return parts[0].replace(/^.*?(?=R\.|Av\.|Rua|Alameda|Travessa|Praça)/i, '')
-                .replace(/Barbearia/g, '')
-                .replace(/\d+,\d+\(\d+\)/g, '')
-                .replace(/·/g, '')
-                .replace(/\s+/g, ' ')
-                .trim();
-            }
-            return "Endereço não encontrado";
-          }).catch(() => "Endereço não encontrado");
-
-          // Telefone - Clicando no item
-          let phone = "Telefone não encontrado";
-          try {
-            await el.click();
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            
-            const selectors = [
-              'div[role="dialog"] button[data-item-id*="phone"]',
-              'div[role="dialog"] button[data-tooltip*="Ligar"]',
-              'div[role="dialog"] [data-item-id*="phone:tel:"]',
-              'div[role="dialog"] button[aria-label*="Phone"]',
-              'div[role="dialog"] button[aria-label*="phone"]'
-            ];
-            
-            let phoneElement = null;
-            for (const selector of selectors) {
-              try {
-                phoneElement = await page.waitForSelector(selector, { timeout: 1500 });
-                if (phoneElement) break;
-              } catch (e) {
-                continue;
-              }
-            }
-
-            if (phoneElement) {
-              const phoneData = await phoneElement.evaluate(e => ({
-                itemId: e.getAttribute('data-item-id'),
-                ariaLabel: e.getAttribute('aria-label'),
-                tooltip: e.getAttribute('data-tooltip'),
-                text: e.textContent.trim()
-              }));
-              
-              if (phoneData.itemId && phoneData.itemId.includes('phone:tel:')) {
-                phone = phoneData.itemId.split('phone:tel:')[1];
-              } else if (phoneData.ariaLabel && phoneData.ariaLabel.toLowerCase().includes('phone:')) {
-                phone = phoneData.ariaLabel.split(':')[1].trim();
-              } else if (phoneData.tooltip && phoneData.tooltip.includes('Ligar')) {
-                phone = phoneData.text;
-              } else {
-                phone = phoneData.text;
-              }
-            }
-            
-            await page.keyboard.press('Escape');
-            await new Promise(resolve => setTimeout(resolve, 500));
-          } catch (error) {
-            console.error(`Erro ao pegar telefone do item ${i+1}:`, error.message);
-            try {
-              await page.keyboard.press('Escape');
-            } catch (e) {}
+    for (const el of elements) {
+      try {
+        // Nome
+        const name = await el.$eval("h3.fontHeadlineSmall, .qBF1Pd", e => e ? e.textContent.trim() : "Nome não encontrado");
+        
+        // Endereço
+        const address = await el.$eval('button[data-item-id*="address"], div[class*="fontBodyMedium"]', e => {
+          const fullText = e.textContent.trim();
+          const parts = fullText.split(/(?:Fechado|Aberto|⋅)/);
+          if (parts.length > 0) {
+            return parts[0].replace(/^.*?(?=R\.|Av\.|Rua|Alameda|Travessa|Praça)/i, '')
+              .replace(/Barbearia/g, '')
+              .replace(/\d+,\d+\(\d+\)/g, '')
+              .replace(/·/g, '')
+              .replace(/\s+/g, ' ')
+              .trim();
           }
+          return "Endereço não encontrado";
+        }).catch(() => "Endereço não encontrado");
 
-          // Website
-          const website = await el.$eval('a[data-item-id*="authority"], a[data-item-id*="website"], button[data-item-id*="authority"], a[href*="http"]:not([href*="google"])', e => {
-            const href = e.getAttribute('href') || e.getAttribute('data-url') || e.getAttribute('data-item-id');
-            if (href && !href.includes('google.com') && !href.includes('maps.google') && !href.includes('search?')) {
-              return href.split('?')[0].trim();
-            }
-            return "Site não encontrado";
-          }).catch(() => "Site não encontrado");
-
-          results.push({
-            name: name.replace(/\s+/g, ' ').trim(),
-            address: address.replace(/\s+/g, ' ').trim(),
-            phone,
-            website
-          });
+        // Telefone - Clicando no item
+        let phone = "Telefone não encontrado";
+        try {
+          // Clica no item
+          await el.click();
           
-          console.log(`Item ${i+1} processado: ${name}`);
+          // Aguarda o painel lateral aparecer
+          await page.waitForSelector('div[role="dialog"]', { timeout: 5000 });
+          
+          // Espera um pouco para garantir que o conteúdo carregou
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          // Tenta diferentes seletores para o telefone
+          const phoneSelectors = [
+            'button[data-item-id*="phone:tel:"]',
+            'button[data-item-id*="phone"]',
+            '[data-tooltip*="phone"]',
+            'button[aria-label*="telefone"]',
+            'button[aria-label*="Telefone"]'
+          ];
+          
+          let phoneElement = null;
+          for (const selector of phoneSelectors) {
+            phoneElement = await page.$(selector);
+            if (phoneElement) break;
+          }
+          
+          if (phoneElement) {
+            phone = await phoneElement.evaluate(e => {
+              // Tenta pegar do data-item-id primeiro
+              const itemId = e.getAttribute('data-item-id');
+              if (itemId && itemId.includes('phone:tel:')) {
+                return itemId.split('phone:tel:')[1];
+              }
+              
+              // Tenta pegar do aria-label
+              const ariaLabel = e.getAttribute('aria-label');
+              if (ariaLabel && ariaLabel.includes('telefone')) {
+                return ariaLabel.replace(/[^0-9+]/g, '');
+              }
+              
+              // Por último, tenta o texto do elemento
+              return e.textContent.trim().replace(/[^0-9+]/g, '');
+            });
+          }
+          
+          // Fecha o painel lateral
+          await page.keyboard.press('Escape');
+          
+          // Espera o painel fechar completamente
+          await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
-          console.error(`Erro ao processar item ${i+1}:`, error.message);
+          console.error('Erro ao pegar telefone:', error);
+          phone = "Telefone não encontrado";
         }
+
+        // Website
+        const website = await el.$eval('a[data-item-id*="authority"], a[data-item-id*="website"], button[data-item-id*="authority"], a[href*="http"]:not([href*="google"])', e => {
+          const href = e.getAttribute('href') || e.getAttribute('data-url') || e.getAttribute('data-item-id');
+          if (href && !href.includes('google.com') && !href.includes('maps.google') && !href.includes('search?')) {
+            return href.split('?')[0].trim();
+          }
+          return "Site não encontrado";
+        }).catch(() => "Site não encontrado");
+
+        results.push({
+          name: name.replace(/\s+/g, ' ').trim(),
+          address: address.replace(/\s+/g, ' ').trim(),
+          phone,
+          website
+        });
+      } catch (error) {
+        console.error('Erro ao processar item:', error);
       }
     }
 
