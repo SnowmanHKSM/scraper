@@ -164,216 +164,148 @@ app.get("/search", async (req, res) => {
       }
     }
 
+    const processedCards = new Set(); // Conjunto para controlar cards já processados
     const results = [];
-    let processedItems = new Set();
-
-    async function processVisibleCards() {
-      try {
-        await page.waitForSelector(global.CARD_SELECTOR, { timeout: 5000 });
-        
-        const cards = await page.$$(global.CARD_SELECTOR);
-        logWithTime(`Encontrados ${cards.length} cards visíveis`);
-
-        let processedCount = 0;
-
-        for (let i = 0; i < cards.length && results.length < maxResults; i++) {
-          try {
-            const isValid = await page.evaluate(card => {
-              return card.isConnected && document.contains(card);
-            }, cards[i]).catch(() => false);
-
-            if (!isValid) {
-              continue;
-            }
-
-            // Tenta diferentes maneiras de obter o ID do card
-            const cardId = await page.evaluate(card => {
-              const nameElement = card.querySelector('div[role="heading"]') || 
-                                card.querySelector('.qBF1Pd') ||
-                                card.querySelector('.fontHeadlineSmall');
-              return nameElement ? nameElement.textContent : null;
-            }, cards[i]);
-
-            if (!cardId || processedItems.has(cardId)) {
-              continue;
-            }
-
-            // Tenta diferentes maneiras de clicar no card
-            try {
-              await cards[i].click();
-            } catch (clickError) {
-              // Se falhar, tenta clicar usando JavaScript
-              await page.evaluate(card => {
-                card.click();
-              }, cards[i]);
-            }
-            
-            await sleep(2000);
-
-            const details = await page.evaluate(() => {
-              const getTextContent = (selectors) => {
-                for (const selector of selectors) {
-                  const element = document.querySelector(selector);
-                  if (element) {
-                    const text = element.textContent.trim();
-                    if (text) return text;
-                  }
-                }
-                return null;
-              };
-
-              const nameSelectors = [
-                'h1.DUwDvf',
-                'div[role="heading"]',
-                '.fontHeadlineLarge',
-                '.qBF1Pd'
-              ];
-
-              const addressSelectors = [
-                'button[data-item-id*="address"]',
-                'div[data-item-id*="address"]',
-                '.rogA2c',
-                '.rlpyBL'
-              ];
-
-              const phoneSelectors = [
-                'button[data-item-id^="phone"]',
-                'div[data-item-id^="phone"]',
-                '.rogA2c span',
-                'span[aria-label*="telefone"]'
-              ];
-
-              const websiteSelectors = [
-                'a[data-item-id*="authority"]',
-                'a[data-item-id*="website"]',
-                'a[aria-label*="site"]',
-                'a.rogA2c'
-              ];
-
-              const name = getTextContent(nameSelectors) || "Nome não encontrado";
-              const address = getTextContent(addressSelectors) || "Endereço não encontrado";
-              
-              // Tratamento especial para telefone
-              let phone = null;
-              for (const selector of phoneSelectors) {
+    let totalScrolls = 0;
+    let lastResultsCount = 0;
+    let sameResultsCount = 0;
+    
+    while (results.length < maxResults && totalScrolls < 20 && sameResultsCount < 3) {
+      // Espera os cards carregarem
+      await page.waitForSelector(global.CARD_SELECTOR, { timeout: 10000 });
+      
+      // Pega todos os cards visíveis
+      const cards = await page.$$(global.CARD_SELECTOR);
+      logWithTime(`Encontrados ${cards.length} cards visíveis`);
+      
+      // Processa cada card
+      for (const card of cards) {
+        try {
+          // Extrai o identificador único do card (pode ser nome + endereço)
+          const nameElement = await card.$('h3.fontHeadlineLarge');
+          const addressElement = await card.$('div[aria-label^="Endereço"]');
+          
+          const name = nameElement ? await nameElement.evaluate(el => el.textContent) : 'Nome não encontrado';
+          const address = addressElement ? await addressElement.evaluate(el => el.textContent) : 'Endereço não encontrado';
+          
+          const cardId = `${name}|${address}`;
+          
+          // Verifica se já processamos este card
+          if (processedCards.has(cardId)) {
+            continue; // Pula para o próximo card
+          }
+          
+          // Marca o card como processado
+          processedCards.add(cardId);
+          
+          // Clica no card para abrir os detalhes
+          await card.click();
+          await sleep(RATE_LIMIT_DELAY);
+          
+          const details = await page.evaluate(() => {
+            const getTextContent = (selectors) => {
+              for (const selector of selectors) {
                 const element = document.querySelector(selector);
                 if (element) {
-                  phone = element.getAttribute("aria-label")?.replace("Telefone: ", "")?.trim() ||
-                         element.textContent.trim();
-                  if (phone) break;
+                  const text = element.textContent.trim();
+                  if (text) return text;
                 }
               }
-              phone = phone || "Telefone não encontrado";
+              return null;
+            };
 
-              // Tratamento especial para website
-              let website = null;
-              for (const selector of websiteSelectors) {
-                const element = document.querySelector(selector);
-                if (element && element.href) {
-                  website = element.href;
-                  break;
-                }
+            const nameSelectors = [
+              'h1.DUwDvf',
+              'div[role="heading"]',
+              '.fontHeadlineLarge',
+              '.qBF1Pd'
+            ];
+
+            const addressSelectors = [
+              'button[data-item-id*="address"]',
+              'div[data-item-id*="address"]',
+              '.rogA2c',
+              '.rlpyBL'
+            ];
+
+            const phoneSelectors = [
+              'button[data-item-id^="phone"]',
+              'div[data-item-id^="phone"]',
+              '.rogA2c span',
+              'span[aria-label*="telefone"]'
+            ];
+
+            const websiteSelectors = [
+              'a[data-item-id*="authority"]',
+              'a[data-item-id*="website"]',
+              'a[aria-label*="site"]',
+              'a.rogA2c'
+            ];
+
+            const name = getTextContent(nameSelectors) || "Nome não encontrado";
+            const address = getTextContent(addressSelectors) || "Endereço não encontrado";
+            
+            // Tratamento especial para telefone
+            let phone = null;
+            for (const selector of phoneSelectors) {
+              const element = document.querySelector(selector);
+              if (element) {
+                phone = element.getAttribute("aria-label")?.replace("Telefone: ", "")?.trim() ||
+                       element.textContent.trim();
+                if (phone) break;
               }
-              website = website || "Site não encontrado";
-
-              return { name, address, phone, website };
-            });
-
-            if (details.name !== "Nome não encontrado") {
-              results.push(details);
-              processedItems.add(cardId);
-              processedCount++;
-              logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
             }
+            phone = phone || "Telefone não encontrado";
 
-            try {
-              await page.keyboard.press('Escape');
-              await sleep(1000);
-            } catch (navError) {
-              logWithTime(`Erro ao navegar de volta: ${navError.message}`);
-              await page.reload({ waitUntil: "networkidle2" });
-              await page.waitForSelector(global.CARD_SELECTOR, { timeout: 5000 });
+            // Tratamento especial para website
+            let website = null;
+            for (const selector of websiteSelectors) {
+              const element = document.querySelector(selector);
+              if (element && element.href) {
+                website = element.href;
+                break;
+              }
             }
+            website = website || "Site não encontrado";
 
-            await sleep(RATE_LIMIT_DELAY);
-          } catch (cardError) {
-            logWithTime(`Erro ao processar card: ${cardError.message}`);
-            continue;
+            return { name, address, phone, website };
+          });
+
+          if (details.name !== "Nome não encontrado") {
+            results.push(details);
+            logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
           }
-        }
 
-        return processedCount;
-      } catch (error) {
-        logWithTime(`Erro ao processar cards: ${error.message}`);
-        return 0;
-      }
-    }
-
-    async function scrollPage() {
-      try {
-        const scrollResult = await page.evaluate(() => {
-          const feed = document.querySelector('div[role="feed"]');
-          if (feed) {
-            const previousHeight = feed.scrollHeight;
-            feed.scrollTo({
-              top: feed.scrollHeight,
-              behavior: 'smooth'
-            });
-            return { previousHeight, success: true };
+          try {
+            await page.keyboard.press('Escape');
+            await sleep(1000);
+          } catch (navError) {
+            logWithTime(`Erro ao navegar de volta: ${navError.message}`);
+            await page.reload({ waitUntil: "networkidle2" });
+            await page.waitForSelector(global.CARD_SELECTOR, { timeout: 5000 });
           }
-          return { success: false };
-        });
-        
-        await sleep(2000);
-        return scrollResult;
-      } catch (error) {
-        logWithTime(`Erro ao rolar página: ${error.message}`);
-        return { success: false };
-      }
-    }
 
-    // Loop principal: rola e processa
-    let totalProcessed = 0;
-    const maxScrolls = 20;
-
-    for (let scrollCount = 0; scrollCount < maxScrolls && results.length < maxResults; scrollCount++) {
-      logWithTime(`Rolagem ${scrollCount + 1}`);
-      const scrollResult = await scrollPage();
-
-      if (!scrollResult.success) {
-        logWithTime("Feed não encontrado. Tentando novamente...");
-        await sleep(3000);
-        continue;
-      }
-
-      await sleep(5000); // Espera mais tempo após a rolagem
-
-      const processedNow = await processVisibleCards();
-      if (processedNow) totalProcessed += processedNow;
-
-      if (results.length >= maxResults) {
-        logWithTime("Limite máximo de resultados atingido.");
-        break;
-      }
-
-      // Verifica se há mais resultados para carregar
-      const currentCardCount = await page.$$(global.CARD_SELECTOR);
-      if (currentCardCount.length === 0) {
-        logWithTime("Nenhum resultado encontrado. Finalizando.");
-        break;
-      }
-
-      // Tenta clicar no botão "Ver mais resultados" se existir
-      try {
-        const moreResultsButton = await page.$('button[jsaction*="pane.paginationSection.nextPage"]');
-        if (moreResultsButton) {
-          logWithTime("Clicando em 'Ver mais resultados'...");
-          await moreResultsButton.click();
-          await sleep(3000);
+          await sleep(RATE_LIMIT_DELAY);
+        } catch (cardError) {
+          logWithTime(`Erro ao processar card: ${cardError.message}`);
           continue;
         }
-      } catch (error) {
-        // Ignora erro se não encontrar o botão
+      }
+      
+      if (results.length === lastResultsCount) {
+        sameResultsCount++;
+      } else {
+        sameResultsCount = 0;
+      }
+      
+      lastResultsCount = results.length;
+      
+      // Faz rolagem apenas se não atingiu o máximo de resultados
+      if (results.length < maxResults) {
+        totalScrolls++;
+        logWithTime(`Rolagem ${totalScrolls}`);
+        await autoScroll(page);
+        await sleep(RATE_LIMIT_DELAY);
       }
     }
 
