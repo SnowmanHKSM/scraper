@@ -119,77 +119,78 @@ app.get("/search", async (req, res) => {
       const elements = document.querySelectorAll(".Nv2PK");
       return Array.from(elements).map((el) => {
         // Nome do estabelecimento
-        const name = el.querySelector(".qBF1Pd.fontHeadlineSmall")?.textContent.trim() || 
-                    el.querySelector(".qBF1Pd")?.textContent.trim() || 
-                    "Nome não encontrado";
+        const name = el.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não encontrado";
         
-        // Endereço - usando o seletor mais preciso
+        // Função auxiliar para encontrar texto que corresponda a um padrão
+        const findTextByPattern = (element, pattern) => {
+          const allElements = element.querySelectorAll('*');
+          for (const el of allElements) {
+            const text = el.textContent.trim();
+            if (pattern(text)) {
+              return text;
+            }
+          }
+          return null;
+        };
+
+        // Endereço - procura por qualquer texto que pareça um endereço
         let address = "Endereço não encontrado";
-        const addressElements = Array.from(el.querySelectorAll('.Io6YTe.fontBodyMedium'));
-        for (const element of addressElements) {
-          const text = element.textContent.trim();
-          // Verifica se é um endereço válido
-          if (text.match(/^(R\.|Rua|Av\.|Avenida|Al\.|Alameda|Rod\.|Rodovia)/i) && 
-              !text.includes("Fechado") && 
-              !text.includes("Aberto")) {
-            address = text;
-            break;
-          }
+        const addressText = findTextByPattern(el, (text) => {
+          return (text.includes('R.') || 
+                 text.includes('Rua') || 
+                 text.includes('Av.') || 
+                 text.includes('Avenida')) &&
+                 text.includes(',') &&
+                 !text.includes('Fechado') &&
+                 !text.includes('Aberto');
+        });
+        if (addressText) {
+          address = addressText;
         }
 
-        // Telefone - procura em elementos específicos
+        // Telefone - procura por qualquer texto que pareça um telefone
         let phone = "Telefone não encontrado";
-        const phoneElements = Array.from(el.querySelectorAll('[data-tooltip*="Copiar número"]'));
-        for (const element of phoneElements) {
-          const ariaLabel = element.getAttribute('aria-label');
-          if (ariaLabel) {
-            const phoneMatch = ariaLabel.match(/\+?\d[\d\s-]{8,}/);
-            if (phoneMatch) {
-              phone = phoneMatch[0].trim();
-              if (!phone.startsWith('+55')) {
-                phone = '+55 ' + phone;
-              }
-              break;
+        const phoneText = findTextByPattern(el, (text) => {
+          // Procura por padrões de telefone: (51) XXXX-XXXX ou +55 51 XXXX-XXXX
+          return /(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}/.test(text) &&
+                 !text.includes('reviews') &&
+                 !text.includes('avaliações');
+        });
+        if (phoneText) {
+          const match = phoneText.match(/(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}/);
+          if (match) {
+            phone = match[0];
+            if (!phone.startsWith('+55')) {
+              phone = '+55 ' + phone;
             }
           }
         }
 
-        // Se não encontrou o telefone no tooltip, procura nos elementos de texto
-        if (phone === "Telefone não encontrado") {
-          const allElements = Array.from(el.querySelectorAll('.Io6YTe.fontBodyMedium'));
-          for (const element of allElements) {
-            const text = element.textContent.trim();
-            if (text.match(/^\+?\d[\d\s-]{8,}/)) {
-              phone = text.trim();
-              if (!phone.startsWith('+55')) {
-                phone = '+55 ' + phone;
-              }
-              break;
-            }
-          }
-        }
-
-        // Website - procura em links específicos
+        // Website - procura por qualquer texto que pareça uma URL
         let website = "Site não encontrado";
-        // Primeiro tenta encontrar o link direto
-        const websiteLinks = Array.from(el.querySelectorAll('a[data-tooltip*="site"]'));
-        for (const link of websiteLinks) {
+        // Primeiro tenta encontrar um link
+        const links = el.querySelectorAll('a[href*="http"]');
+        for (const link of links) {
           const href = link.getAttribute('href');
-          if (href && !href.includes('google.com')) {
+          if (href && 
+              !href.includes('google.com') && 
+              !href.includes('maps.google') &&
+              !href.includes('search?')) {
             website = href;
             break;
           }
         }
-
-        // Se não encontrou, procura no elemento de serviços
+        
+        // Se não encontrou link, procura por texto que pareça um site
         if (website === "Site não encontrado") {
-          const serviceElements = Array.from(el.querySelectorAll('.gSkmPd.fontBodySmall'));
-          for (const element of serviceElements) {
-            const text = element.textContent.trim();
-            if (text.includes('.com') || text.includes('.br')) {
-              website = text;
-              break;
-            }
+          const websiteText = findTextByPattern(el, (text) => {
+            return (text.includes('.com') || 
+                   text.includes('.br') || 
+                   text.includes('www.')) &&
+                   !text.includes('google.com');
+          });
+          if (websiteText) {
+            website = websiteText;
           }
         }
 
