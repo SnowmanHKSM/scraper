@@ -119,29 +119,35 @@ app.get("/search", async (req, res) => {
         // Nome do estabelecimento
         const name = el.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não encontrado";
         
-        // Endereço - tenta diferentes seletores
+        // Endereço - procura especificamente pelo endereço
         let address = "Endereço não encontrado";
-        const addressElement = el.querySelector('.W4Efsd:nth-child(2)') || 
-                             el.querySelector('[data-tooltip]') ||
-                             el.querySelector('button[data-item-id="address"]');
-        if (addressElement) {
-          address = addressElement.textContent.trim();
+        const addressElements = Array.from(el.querySelectorAll('.W4Efsd'));
+        for (const element of addressElements) {
+          const text = element.textContent.trim();
+          // Procura por padrões típicos de endereço (rua, avenida, etc)
+          if (text.match(/^(R\.|Rua|Av\.|Avenida|Al\.|Alameda|Rod\.|Rodovia|Travessa|Praça)/i)) {
+            address = text;
+            break;
+          }
         }
         
-        // Telefone
+        // Telefone - procura especificamente por padrões de telefone
         let phone = "Telefone não encontrado";
-        const phoneElement = el.querySelector('button[data-tooltip*="("]') || 
-                           el.querySelector('button[data-item-id*="phone"]') ||
-                           el.querySelector('button[data-item-id="phone:tel"]');
-        if (phoneElement) {
-          phone = phoneElement.textContent.trim();
+        const phoneElements = Array.from(el.querySelectorAll('button[data-tooltip], .W4Efsd'));
+        for (const element of phoneElements) {
+          const text = element.textContent.trim();
+          // Procura por padrões de telefone ((51), +55, etc)
+          if (text.match(/(\+55|^\(\d{2}\)|\d{2})\s?\d{4,5}-?\d{4}/)) {
+            phone = text.match(/(\+55|^\(\d{2}\)|\d{2})\s?\d{4,5}-?\d{4}/)[0];
+            break;
+          }
         }
         
         // Site
         let website = "Site não encontrado";
         const websiteElement = el.querySelector('a[data-tooltip*="site"]') || 
                              el.querySelector('a[data-item-id*="authority"]') ||
-                             el.querySelector('a[data-item-id="authority"]');
+                             el.querySelector('a[href*="http"]');
         if (websiteElement && websiteElement.href) {
           website = websiteElement.href;
         }
@@ -154,10 +160,13 @@ app.get("/search", async (req, res) => {
 
         // Horário de funcionamento
         let hours = "Horário não disponível";
-        const hoursElement = el.querySelector('[data-tooltip*="Horário"]') ||
-                           el.querySelector('button[data-item-id*="oh"]');
-        if (hoursElement) {
-          hours = hoursElement.textContent.trim();
+        const hoursElements = Array.from(el.querySelectorAll('.W4Efsd, [data-tooltip]'));
+        for (const element of hoursElements) {
+          const text = element.textContent.trim();
+          if (text.match(/(Aberto|Fechado|Fecha|Abre)\s/i)) {
+            hours = text;
+            break;
+          }
         }
 
         return {
