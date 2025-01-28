@@ -6,50 +6,7 @@ puppeteer.use(StealthPlugin());
 const app = express();
 const RATE_LIMIT_DELAY = 2000;
 const MAX_RETRIES = 3;
-
-// Configurações para aumentar o timeout
 const SERVER_TIMEOUT = 25 * 60 * 1000; // 25 minutos
-
-// Variáveis globais para o navegador e página
-let globalBrowser = null;
-let isSearching = false;
-
-// Função para inicializar o navegador
-async function initBrowser() {
-  if (!globalBrowser) {
-    logWithTime("Iniciando navegador...");
-    globalBrowser = await puppeteer.launch({
-      headless: "new",
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-accelerated-2d-canvas",
-        "--disable-gpu",
-        "--window-size=1920x1080",
-      ],
-    });
-  }
-  return globalBrowser;
-}
-
-// Função para limpar recursos
-async function cleanup() {
-  if (globalBrowser) {
-    try {
-      await globalBrowser.close();
-    } catch (error) {
-      logWithTime(`Erro ao fechar navegador: ${error.message}`);
-    }
-    globalBrowser = null;
-  }
-  isSearching = false;
-}
-
-// Configurar limpeza ao encerrar
-process.on('SIGINT', cleanup);
-process.on('SIGTERM', cleanup);
 
 // Configurar timeouts do servidor
 app.use((req, res, next) => {
@@ -77,49 +34,16 @@ function logWithTime(message) {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Função para rolar a página automaticamente
-async function autoScroll(page) {
-  try {
-    await page.evaluate(async () => {
-      const feed = document.querySelector('div[role="feed"]');
-      if (feed) {
-        const previousHeight = feed.scrollHeight;
-        feed.scrollTo({
-          top: feed.scrollHeight,
-          behavior: 'smooth'
-        });
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        return { previousHeight, success: true };
-      }
-      return { success: false };
-    });
-    
-    await sleep(2000); // Espera adicional após a rolagem
-  } catch (error) {
-    logWithTime(`Erro ao rolar página: ${error.message}`);
-    return { success: false };
-  }
-}
-
 app.get("/", (req, res) => {
   res.send("Bem-vindo ao Scraper Google Maps");
 });
 
 // Rota de status para healthcheck
 app.get("/status", (req, res) => {
-  res.json({ 
-    status: "ok", 
-    timestamp: new Date().toISOString(),
-    browserActive: !!globalBrowser,
-    isSearching: isSearching
-  });
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
 app.get("/search", async (req, res) => {
-  if (isSearching) {
-    return res.status(429).json({ error: "Já existe uma busca em andamento. Tente novamente em alguns minutos." });
-  }
-
   const searchTerm = req.query.term;
   const maxResults = parseInt(req.query.max) || 100;
 
@@ -127,106 +51,68 @@ app.get("/search", async (req, res) => {
     return res.status(400).json({ error: "O parâmetro 'term' é obrigatório." });
   }
 
-  // Enviar cabeçalho inicial para manter a conexão viva
-  res.writeHead(200, {
-    'Content-Type': 'application/json',
-    'Transfer-Encoding': 'chunked',
-    'Connection': 'keep-alive'
-  });
-
-  isSearching = true;
-  let page;
+  let browser;
+  const processedItems = new Set(); // Para controlar duplicatas
 
   try {
     logWithTime(`Iniciando nova busca por: ${searchTerm}`);
     
-    const browser = await initBrowser();
-    page = await browser.newPage();
+    browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-accelerated-2d-canvas",
+        "--disable-gpu",
+        "--window-size=1920x1080",
+      ],
+    });
+
+    const page = await browser.newPage();
     await page.setViewport({ width: 1920, height: 1080 });
     
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
-    await page.setExtraHTTPHeaders({
-      'Accept-Language': 'pt-BR,pt;q=0.9',
-    });
 
     const url = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
     await page.goto(url, { waitUntil: "networkidle2" });
-    
-    let retries = 0;
-    while (retries < MAX_RETRIES) {
-      try {
-        // Tenta diferentes seletores que podem indicar que os resultados carregaram
-        const selectors = [
-          'div[role="article"]',
-          '.Nv2PK',
-          'a[href^="https://www.google.com/maps/place"]',
-          'div[jsaction*="mouseover:pane.proxy"]'
-        ];
-        
-        for (const selector of selectors) {
-          try {
-            await page.waitForSelector(selector, { timeout: 10000 });
-            logWithTime(`Resultados encontrados usando seletor: ${selector}`);
-            // Se encontrou um seletor válido, ajusta o seletor global
-            global.CARD_SELECTOR = selector;
-            break;
-          } catch (e) {
-            continue;
-          }
-        }
-        
-        if (!global.CARD_SELECTOR) {
-          throw new Error("Nenhum seletor válido encontrado");
-        }
-        
-        break;
-      } catch (error) {
-        retries++;
-        if (retries === MAX_RETRIES) throw error;
-        logWithTime(`Tentativa ${retries} de ${MAX_RETRIES} para carregar resultados...`);
-        await sleep(2000);
-      }
-    }
 
-    const processedCards = new Set(); // Conjunto para controlar cards já processados
+    // Espera os resultados carregarem
+    await page.waitForSelector('div[role="article"]', { timeout: 10000 })
+      .then(() => logWithTime(`Resultados encontrados usando seletor: div[role="article"]`))
+      .catch(() => {
+        throw new Error("Não foi possível carregar os resultados");
+      });
+
     const results = [];
-    let totalScrolls = 0;
-    let lastResultsCount = 0;
-    let sameResultsCount = 0;
-    
-    while (results.length < maxResults && totalScrolls < 20 && sameResultsCount < 3) {
-      // Espera os cards carregarem
-      await page.waitForSelector(global.CARD_SELECTOR, { timeout: 10000 });
-      
-      // Pega todos os cards visíveis
-      const cards = await page.$$(global.CARD_SELECTOR);
+    let noNewResultsCount = 0;
+    const maxScrolls = 20;
+
+    for (let scrollCount = 0; scrollCount < maxScrolls && results.length < maxResults && noNewResultsCount < 3; scrollCount++) {
+      const cards = await page.$$('div[role="article"]');
       logWithTime(`Encontrados ${cards.length} cards visíveis`);
-      
-      // Processa cada card
+
       for (const card of cards) {
         try {
-          // Extrai o identificador único do card (pode ser nome + endereço)
+          // Extrai um identificador único do card
           const nameElement = await card.$('h3.fontHeadlineLarge');
+          const name = nameElement ? await nameElement.evaluate(el => el.textContent.trim()) : '';
           const addressElement = await card.$('div[aria-label^="Endereço"]');
-          
-          const name = nameElement ? await nameElement.evaluate(el => el.textContent) : 'Nome não encontrado';
-          const address = addressElement ? await addressElement.evaluate(el => el.textContent) : 'Endereço não encontrado';
+          const address = addressElement ? await addressElement.evaluate(el => el.textContent.trim()) : '';
           
           const cardId = `${name}|${address}`;
           
-          // Verifica se já processamos este card
-          if (processedCards.has(cardId)) {
-            continue; // Pula para o próximo card
+          if (processedItems.has(cardId)) {
+            continue;
           }
           
-          // Marca o card como processado
-          processedCards.add(cardId);
-          
-          // Clica no card para abrir os detalhes
+          processedItems.add(cardId);
+
           await card.click();
           await sleep(RATE_LIMIT_DELAY);
-          
-          const details = await page.evaluate(() => {
+
+          const data = await page.evaluate(() => {
             const getTextContent = (selectors) => {
               for (const selector of selectors) {
                 const element = document.querySelector(selector);
@@ -295,89 +181,67 @@ app.get("/search", async (req, res) => {
             return { name, address, phone, website };
           });
 
-          if (details.name !== "Nome não encontrado") {
-            results.push(details);
-            logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
+          if (data.name !== "Nome não encontrado") {
+            results.push(data);
+            logWithTime(`Dados capturados: ${JSON.stringify(data)}`);
           }
 
-          try {
-            await page.keyboard.press('Escape');
-            await sleep(1000);
-          } catch (navError) {
-            logWithTime(`Erro ao navegar de volta: ${navError.message}`);
-            await page.reload({ waitUntil: "networkidle2" });
-            await page.waitForSelector(global.CARD_SELECTOR, { timeout: 5000 });
-          }
+          // Fecha o card atual
+          await page.keyboard.press('Escape');
+          await sleep(1000);
 
-          await sleep(RATE_LIMIT_DELAY);
         } catch (cardError) {
           logWithTime(`Erro ao processar card: ${cardError.message}`);
           continue;
         }
+
+        if (results.length >= maxResults) {
+          break;
+        }
       }
+
+      if (results.length >= maxResults) {
+        break;
+      }
+
+      // Rola a página
+      logWithTime(`Rolagem ${scrollCount + 1}`);
       
-      if (results.length === lastResultsCount) {
-        sameResultsCount++;
+      await page.evaluate(() => {
+        const feed = document.querySelector('div[role="feed"]');
+        if (feed) {
+          feed.scrollTo(0, feed.scrollHeight);
+        }
+      });
+
+      await sleep(3000);
+
+      // Verifica se novos resultados foram carregados
+      const newCards = await page.$$('div[role="article"]');
+      if (newCards.length === cards.length) {
+        noNewResultsCount++;
       } else {
-        sameResultsCount = 0;
-      }
-      
-      lastResultsCount = results.length;
-      
-      // Faz rolagem apenas se não atingiu o máximo de resultados
-      if (results.length < maxResults) {
-        totalScrolls++;
-        logWithTime(`Rolagem ${totalScrolls}`);
-        await autoScroll(page);
-        await sleep(RATE_LIMIT_DELAY);
+        noNewResultsCount = 0;
       }
     }
 
     logWithTime(`Busca finalizada. Total de resultados: ${results.length}`);
-    isSearching = false;
-    return res.end(JSON.stringify({
+
+    await browser.close();
+    logWithTime("Navegador fechado com sucesso");
+
+    return res.json({
       total: results.length,
       results: results
-    }));
+    });
 
   } catch (error) {
     logWithTime(`Erro durante a execução: ${error.message}`);
-    isSearching = false;
-    
-    if (page) {
-      try {
-        await page.close();
-      } catch (e) {
-        logWithTime(`Erro ao fechar página: ${e.message}`);
-      }
+    if (browser) {
+      await browser.close();
+      logWithTime("Navegador fechado após erro");
     }
-    
-    // Se os headers ainda não foram enviados, envia uma resposta de erro
-    if (!res.headersSent) {
-      return res.status(500).json({ error: error.message });
-    } else {
-      // Se os headers já foram enviados, termina a resposta com o erro
-      return res.end(JSON.stringify({ error: error.message }));
-    }
-  } finally {
-    if (page) {
-      try {
-        await page.close();
-      } catch (e) {
-        logWithTime(`Erro ao fechar página: ${e.message}`);
-      }
-    }
-  }
-});
-
-// Rota para reiniciar o navegador se necessário
-app.post("/reset", async (req, res) => {
-  try {
-    await cleanup();
-    await initBrowser();
-    res.json({ status: "ok", message: "Navegador reiniciado com sucesso" });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: error.message });
   }
 });
 
@@ -386,17 +250,9 @@ if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   const HOST = '0.0.0.0';
   
-  const server = app.listen(PORT, HOST, async () => {
+  const server = app.listen(PORT, HOST, () => {
     console.log(`Servidor rodando em http://${HOST}:${PORT}`);
     console.log(`Para fazer uma busca, acesse: http://${HOST}:${PORT}/search?term=sua+busca`);
-    
-    // Inicializa o navegador ao iniciar o servidor
-    try {
-      await initBrowser();
-      console.log('Navegador inicializado com sucesso');
-    } catch (error) {
-      console.error('Erro ao inicializar navegador:', error);
-    }
   });
 
   // Configurar timeout do servidor
