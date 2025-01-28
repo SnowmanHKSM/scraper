@@ -125,7 +125,7 @@ app.get("/search", async (req, res) => {
         
         // Scroll para o elemento
         await el.evaluate(e => e.scrollIntoView());
-        await page.waitForTimeout(500);
+        await page.waitFor(500);
         
         // Nome do estabelecimento
         const name = await el.$eval('.qBF1Pd', el => el.textContent.trim())
@@ -133,7 +133,7 @@ app.get("/search", async (req, res) => {
         
         // Clica no elemento para abrir os detalhes
         await el.click();
-        await page.waitForTimeout(2000);
+        await page.waitFor(2000);
         
         // Endereço
         const address = await page.$eval('button[data-item-id*="address"]', el => el.textContent.trim())
@@ -170,7 +170,7 @@ app.get("/search", async (req, res) => {
         await page.click('button[jsaction*="pane.place.backToList"]')
           .catch(() => console.log('Erro ao voltar para a lista'));
         
-        await page.waitForTimeout(1000);
+        await page.waitFor(1000);
         
         // Adiciona o resultado
         results.push({
