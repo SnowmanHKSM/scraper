@@ -121,45 +121,73 @@ app.get("/search", async (req, res) => {
                     el.querySelector(".qBF1Pd")?.textContent.trim() || 
                     "Nome não encontrado";
         
-        // Endereço - usando a classe exata
+        // Endereço - usando o seletor mais preciso
         let address = "Endereço não encontrado";
-        const addressDivs = Array.from(el.querySelectorAll('.Io6YTe.fontBodyMedium.kR99db.fdkmkc'));
-        
-        for (const div of addressDivs) {
-          const text = div.textContent.trim();
-          // Verifica se parece um endereço (contém rua, avenida, etc)
-          if (text.match(/R\.|Rua|Av\.|Avenida|Al\.|Alameda|Rod\.|Rodovia/i)) {
+        const addressElements = Array.from(el.querySelectorAll('.Io6YTe.fontBodyMedium'));
+        for (const element of addressElements) {
+          const text = element.textContent.trim();
+          // Verifica se é um endereço válido
+          if (text.match(/^(R\.|Rua|Av\.|Avenida|Al\.|Alameda|Rod\.|Rodovia)/i) && 
+              !text.includes("Fechado") && 
+              !text.includes("Aberto")) {
             address = text;
             break;
           }
         }
 
-        // Telefone - procura em todos os elementos com a classe específica
+        // Telefone - procura em elementos específicos
         let phone = "Telefone não encontrado";
-        const phoneDivs = Array.from(el.querySelectorAll('.Io6YTe.fontBodyMedium.kR99db.fdkmkc'));
-        
-        for (const div of phoneDivs) {
-          const text = div.textContent.trim();
-          if (text.match(/^\+55\s*\d{2}\s*\d{4,5}-\d{4}$/)) {
-            phone = text;
+        const phoneElements = Array.from(el.querySelectorAll('[data-tooltip*="Copiar número"]'));
+        for (const element of phoneElements) {
+          const ariaLabel = element.getAttribute('aria-label');
+          if (ariaLabel) {
+            const phoneMatch = ariaLabel.match(/\+?\d[\d\s-]{8,}/);
+            if (phoneMatch) {
+              phone = phoneMatch[0].trim();
+              if (!phone.startsWith('+55')) {
+                phone = '+55 ' + phone;
+              }
+              break;
+            }
+          }
+        }
+
+        // Se não encontrou o telefone no tooltip, procura nos elementos de texto
+        if (phone === "Telefone não encontrado") {
+          const allElements = Array.from(el.querySelectorAll('.Io6YTe.fontBodyMedium'));
+          for (const element of allElements) {
+            const text = element.textContent.trim();
+            if (text.match(/^\+?\d[\d\s-]{8,}/)) {
+              phone = text.trim();
+              if (!phone.startsWith('+55')) {
+                phone = '+55 ' + phone;
+              }
+              break;
+            }
+          }
+        }
+
+        // Website - procura em links específicos
+        let website = "Site não encontrado";
+        // Primeiro tenta encontrar o link direto
+        const websiteLinks = Array.from(el.querySelectorAll('a[data-tooltip*="site"]'));
+        for (const link of websiteLinks) {
+          const href = link.getAttribute('href');
+          if (href && !href.includes('google.com')) {
+            website = href;
             break;
           }
         }
 
-        // Website - usando a classe CsEnBe
-        let website = "Site não encontrado";
-        const websiteElements = Array.from(el.querySelectorAll('a.CsEnBe'));
-        
-        for (const element of websiteElements) {
-          const href = element.getAttribute('href');
-          if (href && !href.includes('google.com') && !href.includes('maps.google')) {
-            const domainDiv = element.querySelector('.gSkmPd.fontBodySmall.DshQNd');
-            if (domainDiv) {
-              website = domainDiv.textContent.trim();
-            } else {
-              website = href;
+        // Se não encontrou, procura no elemento de serviços
+        if (website === "Site não encontrado") {
+          const serviceElements = Array.from(el.querySelectorAll('.gSkmPd.fontBodySmall'));
+          for (const element of serviceElements) {
+            const text = element.textContent.trim();
+            if (text.includes('.com') || text.includes('.br')) {
+              website = text;
+              break;
             }
-            break;
           }
         }
 
