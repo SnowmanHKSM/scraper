@@ -138,8 +138,21 @@ app.get("/search", async (req, res) => {
                 !addressText.includes("Fechado") && 
                 !addressText.includes("Aberto") && 
                 !addressText.includes("Abre")) {
-              address = addressText;
-              break;
+              // Remove o tipo do estabelecimento e limpa o endereço
+              address = addressText
+                .split("·") // Divide por ·
+                .map(part => part.trim()) // Remove espaços
+                .filter(part => 
+                  !part.includes("Pet Shop") && 
+                  !part.includes("Veterinário") && 
+                  !part.includes("Pet store") &&
+                  part !== "" && 
+                  !part.includes("Compras na loja")
+                ) // Remove tipos de estabelecimento
+                .join(" · ") // Junta novamente com ·
+                .trim(); // Remove espaços extras
+              
+              if (address) break;
             }
           }
         }
@@ -150,10 +163,12 @@ app.get("/search", async (req, res) => {
         for (const element of allElements) {
           const text = element.textContent.trim();
           if (text.includes("+55")) {
-            phone = text.split("·")
-                       .find(part => part.includes("+55"))
-                       ?.trim() || phone;
-            break;
+            // Extrai apenas o número do telefone usando regex
+            const phoneMatch = text.match(/\+55\s+\d{2}\s*\d{4,5}-\d{4}/);
+            if (phoneMatch) {
+              phone = phoneMatch[0].trim();
+              break;
+            }
           }
         }
         
