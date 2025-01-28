@@ -214,11 +214,24 @@ app.get("/search", async (req, res) => {
       }
     }
 
-    await browser.close();
-    logWithTime("Navegador fechado com sucesso");
-
     // Retorna os resultados como JSON
     logWithTime(`Busca finalizada! ${results.length} resultados encontrados`);
+    
+    try {
+      // Garante que todas as páginas sejam fechadas
+      const pages = await browser.pages();
+      await Promise.all(pages.map(page => page.close()));
+      
+      // Fecha o navegador
+      await browser.close();
+      logWithTime("Navegador fechado com sucesso");
+      
+      // Força a limpeza de memória
+      global.gc && global.gc();
+    } catch (closeError) {
+      console.error("Erro ao fechar navegador:", closeError);
+    }
+    
     logWithTime("Sistema pronto para nova busca!");
     console.log("----------------------------------------");
     
@@ -229,6 +242,19 @@ app.get("/search", async (req, res) => {
     });
   } catch (error) {
     console.error("Erro ao realizar a pesquisa:", error);
+    
+    // Tenta fechar o navegador mesmo em caso de erro
+    if (browser) {
+      try {
+        const pages = await browser.pages();
+        await Promise.all(pages.map(page => page.close()));
+        await browser.close();
+        logWithTime("Navegador fechado após erro");
+      } catch (closeError) {
+        console.error("Erro ao fechar navegador após erro:", closeError);
+      }
+    }
+    
     logWithTime("Ocorreu um erro durante a busca!");
     logWithTime("Sistema pronto para nova busca!");
     console.log("----------------------------------------");
