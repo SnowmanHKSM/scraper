@@ -118,47 +118,52 @@ app.get("/search", async (req, res) => {
     const results = await page.evaluate(() => {
       const elements = document.querySelectorAll(".Nv2PK");
       return Array.from(elements).map((el) => {
-        // Nome do estabelecimento - remove espaços extras
-        const name = el.querySelector(".qBF1Pd")?.textContent.trim()
-          .replace(/\s+/g, ' ') || "Nome não encontrado";
-        
-        // Função auxiliar para encontrar texto que corresponda a um padrão
-        const findTextByPattern = (element, pattern) => {
-          const allElements = element.querySelectorAll('*');
-          for (const el of allElements) {
-            const text = el.textContent.trim();
-            if (pattern(text)) {
-              return text;
-            }
+        // Debug function
+        const logElement = (element, description) => {
+          if (element) {
+            console.log(`Found ${description}:`, {
+              text: element.textContent,
+              classes: element.className,
+              attributes: Array.from(element.attributes).map(attr => `${attr.name}="${attr.value}"`).join(' ')
+            });
+          } else {
+            console.log(`${description} not found`);
           }
-          return null;
         };
 
-        // Endereço - procura por qualquer texto que pareça um endereço
+        // Nome do estabelecimento
+        const nameElement = el.querySelector(".qBF1Pd");
+        logElement(nameElement, "Name element");
+        const name = nameElement?.textContent.trim()
+          .replace(/\s+/g, ' ') || "Nome não encontrado";
+
+        // Endereço - agora procura por elementos específicos
         let address = "Endereço não encontrado";
-        const addressText = findTextByPattern(el, (text) => {
-          return (text.includes('R.') || 
-                 text.includes('Rua') || 
-                 text.includes('Av.') || 
-                 text.includes('Avenida')) &&
-                 text.includes(',') &&
-                 !text.includes('Fechado') &&
-                 !text.includes('Aberto');
-        });
-        if (addressText) {
-          // Limpa o endereço removendo "Barbearia" e textos indesejados
-          address = addressText
-            .replace(/^(Barbearia|Barber\s*Shop|Salão)[\s·]*/, '')  // Remove "Barbearia" do início
-            .replace(/·/g, '')  // Remove bullets
-            .replace(/\s+/g, ' ')  // Remove espaços extras
-            .trim();
+        const addressElements = Array.from(el.querySelectorAll('[role="button"]'));
+        for (const element of addressElements) {
+          const text = element.textContent.trim();
+          logElement(element, "Address candidate");
+          if ((text.includes('R.') || 
+               text.includes('Rua') || 
+               text.includes('Av.') || 
+               text.includes('Avenida')) &&
+              text.includes(',')) {
+            address = text
+              .replace(/^(Barbearia|Barber\s*Shop|Salão)[\s·]*/, '')
+              .replace(/·/g, '')
+              .replace(/\s+/g, ' ')
+              .trim();
+            break;
+          }
         }
 
-        // Telefone - usando o seletor data-item-id
+        // Telefone - usando data-item-id
         let phone = "Telefone não encontrado";
-        const phoneButton = el.querySelector('button[data-item-id*="phone"]');
-        if (phoneButton) {
-          const phoneDiv = phoneButton.querySelector('.Io6YTe.fontBodyMedium');
+        const phoneButtons = el.querySelectorAll('button[data-item-id*="phone"], button[jsaction*="phone"]');
+        phoneButtons.forEach(btn => logElement(btn, "Phone button"));
+        
+        for (const phoneButton of phoneButtons) {
+          const phoneDiv = phoneButton.querySelector('.Io6YTe');
           if (phoneDiv) {
             const phoneText = phoneDiv.textContent.trim();
             if (phoneText) {
@@ -176,38 +181,37 @@ app.get("/search", async (req, res) => {
                   cleanPhone.slice(8, 12)        // Segunda parte
                 ];
                 phone = `${parts[0]} ${parts[1]} ${parts[2]}-${parts[3]}`;
+                break;
               }
             }
           }
         }
 
-        // Website - procura por qualquer texto que pareça uma URL
+        // Website - procura por links e elementos com URLs
         let website = "Site não encontrado";
-        // Primeiro tenta encontrar um link
-        const links = el.querySelectorAll('a[href*="http"]');
-        for (const link of links) {
-          const href = link.getAttribute('href');
+        const websiteElements = [
+          ...el.querySelectorAll('a[data-item-id*="website"]'),
+          ...el.querySelectorAll('button[data-item-id*="authority"]'),
+          ...el.querySelectorAll('a[href*="http"]')
+        ];
+        
+        websiteElements.forEach(el => logElement(el, "Website candidate"));
+        
+        for (const element of websiteElements) {
+          const href = element.getAttribute('href') || element.getAttribute('data-url');
           if (href && 
               !href.includes('google.com') && 
               !href.includes('maps.google') &&
               !href.includes('search?')) {
-            // Limpa a URL removendo parâmetros do Google
             website = href.split('?')[0];
             break;
           }
-        }
-        
-        // Se não encontrou link, procura por texto que pareça um site
-        if (website === "Site não encontrado") {
-          const websiteText = findTextByPattern(el, (text) => {
-            return (text.includes('.com') || 
-                   text.includes('.br') || 
-                   text.includes('www.')) &&
-                   !text.includes('google.com');
-          });
-          if (websiteText) {
-            // Limpa a URL
-            website = websiteText.split('?')[0].trim();
+          
+          // Se não tem href, procura no texto
+          const text = element.textContent.trim();
+          if (text && (text.includes('.com') || text.includes('.br'))) {
+            website = text.split('?')[0];
+            break;
           }
         }
 
