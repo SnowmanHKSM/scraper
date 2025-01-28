@@ -8,7 +8,7 @@ const RATE_LIMIT_DELAY = 2000;
 const MAX_RETRIES = 3;
 
 // Configurações para aumentar o timeout
-const SERVER_TIMEOUT = 10 * 60 * 1000; // 10 minutos
+const SERVER_TIMEOUT = 25 * 60 * 1000; // 25 minutos
 
 // Variáveis globais para o navegador e página
 let globalBrowser = null;
