@@ -143,29 +143,43 @@ app.get("/search", async (req, res) => {
         try {
           // Clica no item
           await el.click();
+          await new Promise(resolve => setTimeout(resolve, 2000));
           
-          // Aguarda o painel lateral aparecer
-          const panel = await page.waitForSelector('div[role="dialog"]', { timeout: 5000 });
-          if (panel) {
-            // Aguarda o botão do telefone dentro do painel
-            await page.waitForSelector('div[role="dialog"] button[data-item-id*="phone"]', { timeout: 5000 });
+          // Tenta diferentes seletores para o painel e telefone
+          const selectors = [
+            'div[role="dialog"] button[data-item-id*="phone"]',
+            'div[role="dialog"] button[data-tooltip*="Ligar"]',
+            'div[role="dialog"] [data-item-id*="phone:tel:"]',
+            'div[role="dialog"] button[aria-label*="Phone"]',
+            'div[role="dialog"] button[aria-label*="phone"]'
+          ];
+          
+          let phoneElement = null;
+          for (const selector of selectors) {
+            try {
+              phoneElement = await page.waitForSelector(selector, { timeout: 2000 });
+              if (phoneElement) break;
+            } catch (e) {
+              continue;
+            }
+          }
+
+          if (phoneElement) {
+            const phoneData = await phoneElement.evaluate(e => ({
+              itemId: e.getAttribute('data-item-id'),
+              ariaLabel: e.getAttribute('aria-label'),
+              tooltip: e.getAttribute('data-tooltip'),
+              text: e.textContent.trim()
+            }));
             
-            // Procura o telefone especificamente dentro do painel aberto
-            const phoneElement = await panel.$('button[data-item-id*="phone"]');
-            if (phoneElement) {
-              const phoneData = await phoneElement.evaluate(e => ({
-                itemId: e.getAttribute('data-item-id'),
-                ariaLabel: e.getAttribute('aria-label'),
-                text: e.textContent.trim()
-              }));
-              
-              if (phoneData.itemId && phoneData.itemId.includes('phone:tel:')) {
-                phone = phoneData.itemId.split('phone:tel:')[1];
-              } else if (phoneData.ariaLabel && phoneData.ariaLabel.toLowerCase().includes('phone:')) {
-                phone = phoneData.ariaLabel.split(':')[1].trim();
-              } else {
-                phone = phoneData.text;
-              }
+            if (phoneData.itemId && phoneData.itemId.includes('phone:tel:')) {
+              phone = phoneData.itemId.split('phone:tel:')[1];
+            } else if (phoneData.ariaLabel && phoneData.ariaLabel.toLowerCase().includes('phone:')) {
+              phone = phoneData.ariaLabel.split(':')[1].trim();
+            } else if (phoneData.tooltip && phoneData.tooltip.includes('Ligar')) {
+              phone = phoneData.text;
+            } else {
+              phone = phoneData.text;
             }
           }
           
@@ -174,6 +188,10 @@ app.get("/search", async (req, res) => {
           await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
           console.error('Erro ao pegar telefone:', error);
+          // Garante que voltamos para a lista mesmo em caso de erro
+          try {
+            await page.keyboard.press('Escape');
+          } catch (e) {}
         }
 
         // Website
