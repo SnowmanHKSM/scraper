@@ -119,22 +119,39 @@ app.get("/search", async (req, res) => {
         // Nome do estabelecimento
         const name = el.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não encontrado";
         
-        // Endereço - tenta diferentes seletores
+        // Endereço completo para parsing
+        const addressFull = el.querySelector('.W4Efsd:nth-child(2)')?.textContent.trim() || "";
+        
+        // Separar os componentes do endereço
         let address = "Endereço não encontrado";
-        const addressElement = el.querySelector('.W4Efsd:nth-child(2)') || 
-                             el.querySelector('[data-tooltip]') ||
-                             el.querySelector('button[data-item-id="address"]');
-        if (addressElement) {
-          address = addressElement.textContent.trim();
+        let phone = "Telefone não encontrado";
+        let hours = "Horário não disponível";
+        
+        if (addressFull) {
+          // Separa os componentes por ·
+          const parts = addressFull.split("·").map(p => p.trim());
+          
+          parts.forEach(part => {
+            if (part.includes("+55")) {
+              phone = part.trim();
+            } else if (part.includes("Fechado") || part.includes("Aberto") || part.includes("Abre")) {
+              hours = part.trim();
+            } else {
+              // Se não é telefone nem horário, é endereço
+              if (part && part !== "Fechado" && part !== "Aberto") {
+                address = part.trim();
+              }
+            }
+          });
         }
         
-        // Telefone
-        let phone = "Telefone não encontrado";
-        const phoneElement = el.querySelector('button[data-tooltip*="("]') || 
-                           el.querySelector('button[data-item-id*="phone"]') ||
-                           el.querySelector('button[data-item-id="phone:tel"]');
-        if (phoneElement) {
-          phone = phoneElement.textContent.trim();
+        // Tenta pegar o telefone de outras formas se não encontrou
+        if (phone === "Telefone não encontrado") {
+          const phoneElement = el.querySelector('button[data-tooltip*="("]') || 
+                             el.querySelector('button[data-item-id*="phone"]');
+          if (phoneElement) {
+            phone = phoneElement.textContent.trim();
+          }
         }
         
         // Site
@@ -146,19 +163,9 @@ app.get("/search", async (req, res) => {
           website = websiteElement.href;
         }
         
-        // Avaliação
+        // Avaliação e número de reviews
         const rating = el.querySelector(".MW4etd")?.textContent.trim() || "Sem avaliação";
-        
-        // Número de avaliações
         const reviews = el.querySelector(".UY7F9")?.textContent.replace(/[()]/g, "").trim() || "0";
-
-        // Horário de funcionamento
-        let hours = "Horário não disponível";
-        const hoursElement = el.querySelector('[data-tooltip*="Horário"]') ||
-                           el.querySelector('button[data-item-id*="oh"]');
-        if (hoursElement) {
-          hours = hoursElement.textContent.trim();
-        }
 
         return {
           name,
