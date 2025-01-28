@@ -154,43 +154,65 @@ app.get("/search", async (req, res) => {
             .trim();
         }
 
-        // Telefone - procura primeiro por números com +55
+        // Telefone - procura primeiro no botão específico
         let phone = "Telefone não encontrado";
-        const phonePatterns = [
-          // Primeiro tenta encontrar números com +55
-          (text) => /\+55\s*\d{2}\s*\d{4,5}[-\s]?\d{4}/.test(text),
-          // Depois tenta números com DDD
-          (text) => /\(\d{2}\)\s*\d{4,5}[-\s]?\d{4}/.test(text),
-          // Por último, qualquer número que pareça telefone
-          (text) => /\d{4,5}[-\s]?\d{4}/.test(text)
-        ];
-
-        for (const pattern of phonePatterns) {
-          const phoneText = findTextByPattern(el, (text) => {
-            return pattern(text) &&
-                   !text.includes('reviews') &&
-                   !text.includes('avaliações');
-          });
-
-          if (phoneText) {
-            // Extrai apenas o número do texto
-            const numberMatch = phoneText.match(/(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}/);
-            if (numberMatch) {
-              let cleanPhone = numberMatch[0]
-                .replace(/[^\d+]/g, '')  // Remove tudo exceto números e +
-                .replace(/^(?!\+55)/, '+55');  // Adiciona +55 se não existir
+        const phoneButton = el.querySelector('button.CsEnBe[data-tooltip="Copiar número de telefone"]');
+        if (phoneButton) {
+          const phoneDiv = phoneButton.querySelector('.Io6YTe.fontBodyMedium');
+          if (phoneDiv) {
+            const phoneText = phoneDiv.textContent.trim();
+            if (phoneText) {
+              // Limpa e formata o número
+              const cleanPhone = phoneText
+                .replace(/[^\d]/g, '')  // Remove tudo exceto números
+                .replace(/^(?!55)/, '55');  // Adiciona 55 se não existir
               
-              // Formata o número
-              if (cleanPhone.startsWith('+55')) {
+              // Formata como +55 DD XXXX-XXXX
+              if (cleanPhone.length >= 11) {
                 const parts = [
-                  cleanPhone.slice(0, 3),  // +55
-                  cleanPhone.slice(3, 5),  // DDD
-                  cleanPhone.slice(5, 9),  // Primeira parte
-                  cleanPhone.slice(9)      // Segunda parte
+                  '+' + cleanPhone.slice(0, 2),  // +55
+                  cleanPhone.slice(2, 4),        // DDD
+                  cleanPhone.slice(4, 8),        // Primeira parte
+                  cleanPhone.slice(8, 12)        // Segunda parte
                 ];
                 phone = `${parts[0]} ${parts[1]} ${parts[2]}-${parts[3]}`;
               }
-              break;
+            }
+          }
+        }
+
+        // Se não encontrou no botão, tenta encontrar em outros lugares
+        if (phone === "Telefone não encontrado") {
+          const phonePatterns = [
+            // Procura por números com +55 ou (DD)
+            (text) => /(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}/.test(text)
+          ];
+
+          for (const pattern of phonePatterns) {
+            const phoneText = findTextByPattern(el, (text) => {
+              return pattern(text) &&
+                     !text.includes('reviews') &&
+                     !text.includes('avaliações');
+            });
+
+            if (phoneText) {
+              const numberMatch = phoneText.match(/(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}/);
+              if (numberMatch) {
+                const cleanPhone = numberMatch[0]
+                  .replace(/[^\d]/g, '')  // Remove tudo exceto números
+                  .replace(/^(?!55)/, '55');  // Adiciona 55 se não existir
+                
+                if (cleanPhone.length >= 11) {
+                  const parts = [
+                    '+' + cleanPhone.slice(0, 2),  // +55
+                    cleanPhone.slice(2, 4),        // DDD
+                    cleanPhone.slice(4, 8),        // Primeira parte
+                    cleanPhone.slice(8, 12)        // Segunda parte
+                  ];
+                  phone = `${parts[0]} ${parts[1]} ${parts[2]}-${parts[3]}`;
+                  break;
+                }
+              }
             }
           }
         }
