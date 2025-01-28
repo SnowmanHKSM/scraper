@@ -57,6 +57,16 @@ app.get("/search", async (req, res) => {
     // Aguarda o carregamento dos resultados
     await page.waitForSelector(".Nv2PK", { timeout: 30000 });
 
+    // Função para esperar um elemento específico
+    const waitForElement = async (selector, timeout = 2000) => {
+      try {
+        await page.waitForSelector(selector, { timeout });
+        return true;
+      } catch (e) {
+        return false;
+      }
+    };
+
     // Função para contar resultados atuais
     const countResults = async () => {
       return await page.evaluate(() => {
@@ -112,67 +122,62 @@ app.get("/search", async (req, res) => {
     }
 
     logWithTime(`Iniciando extração de dados de ${previousResultCount} resultados...`);
-    
-    const results = [];
-    
-    // Pega todos os elementos da lista
-    const elements = await page.$$('.Nv2PK');
-    
-    // Processa cada elemento
-    for (let i = 0; i < elements.length; i++) {
-      try {
-        const el = elements[i];
-        
-        // Scroll para o elemento
-        await el.evaluate(e => e.scrollIntoView());
-        await page.waitFor(500);
-        
-        // Nome do estabelecimento
-        const name = await el.$eval('.qBF1Pd', el => el.textContent.trim())
-          .catch(() => "Nome não encontrado");
+    // Extrair os dados dos resultados
+    const results = await page.evaluate(async () => {
+      const elements = document.querySelectorAll(".Nv2PK");
+      const results = [];
+
+      for (const el of elements) {
+        // Nome do estabelecimento (mesmo seletor do Python)
+        const name = el.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não encontrado";
         
         // Clica no elemento para abrir os detalhes
-        await el.click();
-        await page.waitFor(2000);
+        el.click();
         
-        // Endereço
-        const address = await page.$eval('button[data-item-id*="address"]', el => el.textContent.trim())
-          .catch(() => "Endereço não encontrado");
+        // Aguarda um pouco para os detalhes carregarem
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
-        // Telefone
-        const phone = await page.$eval('button[data-item-id*="phone"]', el => {
-          return el.textContent.trim()
-            .replace(/^\+55\s*/, '')
-            .replace(/[\(\)]/g, '');
-        }).catch(() => "Telefone não encontrado");
+        // Endereço (usando o seletor do Python)
+        let address = "Endereço não encontrado";
+        const addressElement = document.querySelector('button[data-item-id*="address"]');
+        if (addressElement) {
+          address = addressElement.textContent.trim();
+        }
         
-        // Website
-        const website = await page.$eval('a[aria-label*="Visitar site"], a[aria-label*="Visit site"]', el => el.href)
-          .catch(() => "Site não encontrado");
+        // Telefone (usando o seletor do Python)
+        let phone = "Telefone não encontrado";
+        const phoneElement = document.querySelector('button[data-item-id*="phone"]');
+        if (phoneElement) {
+          phone = phoneElement.textContent.trim();
+        }
         
-        // Avaliação
-        const rating = await el.$eval('.MW4etd', el => el.textContent.trim())
-          .catch(() => "Sem avaliação");
+        // Website (usando o seletor do Python)
+        let website = "Site não encontrado";
+        const websiteElement = document.querySelector('a[aria-label*="Visitar site"], a[aria-label*="Visit site"]');
+        if (websiteElement) {
+          website = websiteElement.href;
+        }
         
-        // Número de avaliações
-        const reviews = await el.$eval('.UY7F9', el => el.textContent.replace(/[()]/g, "").trim())
-          .catch(() => "0");
+        // Avaliação (mesmo seletor do Python)
+        const rating = el.querySelector(".MW4etd")?.textContent.trim() || "Sem avaliação";
         
-        // Horário
-        const hours = await page.$eval('button[data-item-id*="oh"]', el => {
-          return el.textContent.trim()
-            .split('·')[0]
-            .replace(/\s+•\s+/g, ' ')
-            .replace(/\s+⋅\s+/g, ' ');
-        }).catch(() => "Horário não disponível");
-        
+        // Número de avaliações (mesmo seletor do Python)
+        const reviews = el.querySelector(".UY7F9")?.textContent.replace(/[()]/g, "").trim() || "0";
+
+        // Horário de funcionamento
+        let hours = "Horário não disponível";
+        const hoursElement = document.querySelector('button[data-item-id*="oh"]');
+        if (hoursElement) {
+          hours = hoursElement.textContent.trim();
+        }
+
         // Volta para a lista
-        await page.click('button[jsaction*="pane.place.backToList"]')
-          .catch(() => console.log('Erro ao voltar para a lista'));
-        
-        await page.waitFor(1000);
-        
-        // Adiciona o resultado
+        const backButton = document.querySelector('button[jsaction="pane.place.backToList"]');
+        if (backButton) {
+          backButton.click();
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
         results.push({
           name,
           address,
@@ -182,14 +187,10 @@ app.get("/search", async (req, res) => {
           reviews,
           hours
         });
-        
-        logWithTime(`Processado item ${i + 1} de ${elements.length}: ${name}`);
-        
-      } catch (error) {
-        console.error('Erro ao processar item:', error);
-        continue;
       }
-    }
+
+      return results;
+    });
 
     await browser.close();
     logWithTime("Navegador fechado com sucesso");
