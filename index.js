@@ -114,11 +114,6 @@ app.get("/search", async (req, res) => {
     logWithTime(`Iniciando extração de dados de ${previousResultCount} resultados...`);
     // Extrair os dados dos resultados
     const results = await page.evaluate(() => {
-      // Função para limpar caracteres indesejados do texto
-      function cleanText(text) {
-        return text.replace(/[^\w\s,.-]/g, "").trim();
-      }
-
       const elements = document.querySelectorAll(".Nv2PK");
       return Array.from(elements).map((el) => {
         // Nome do estabelecimento
@@ -136,19 +131,36 @@ app.get("/search", async (req, res) => {
         for (const selector of addressSelectors) {
           const addressElement = el.querySelector(selector);
           if (addressElement) {
-            let addressText = addressElement.textContent.trim();
-            
-            // Filtra caracteres indesejados
-            let cleanAddress = cleanText(addressText);
-            
-            // Se o endereço for válido
-            if (cleanAddress && 
-                !cleanAddress.includes("Pet Shop") && 
-                !cleanAddress.includes("Veterinario") && 
-                !cleanAddress.includes("Pet store") &&
-                !cleanAddress.includes("Compras na loja")) {
-              address = cleanAddress;
-              break;
+            const addressText = addressElement.textContent.trim();
+            // Verifica se o texto não contém telefone ou horário
+            if (addressText && 
+                !addressText.includes("+55") && 
+                !addressText.includes("Fechado") && 
+                !addressText.includes("Aberto") && 
+                !addressText.includes("Abre")) {
+              // Remove o tipo do estabelecimento e limpa o endereço
+              let cleanAddress = addressText
+                .split("·") // Divide por ·
+                .map(part => part.trim()) // Remove espaços
+                .filter(part => 
+                  !part.includes("Pet Shop") && 
+                  !part.includes("Veterinário") && 
+                  !part.includes("Pet store") &&
+                  part !== "" && 
+                  !part.includes("Compras na loja")
+                ) // Remove tipos de estabelecimento
+                .filter(part => part.length > 0) // Remove partes vazias
+                .join(" · ") // Junta novamente com ·
+                .trim(); // Remove espaços extras
+              
+              // Remove qualquer ponto ou espaço no início
+              cleanAddress = cleanAddress.replace(/^[·\s]+/, '');
+              
+              // Se ainda houver conteúdo após a limpeza
+              if (cleanAddress && cleanAddress.length > 0) {
+                address = cleanAddress;
+                break;
+              }
             }
           }
         }
