@@ -5,16 +5,16 @@ puppeteer.use(StealthPlugin());
 
 const app = express();
 
-// Configurações de timeout
+// Aumenta o timeout do servidor
 app.use((req, res, next) => {
   res.setTimeout(300000); // 5 minutos
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Keep-Alive', 'timeout=300');
   next();
 });
 
+// Configurações
 const RATE_LIMIT_DELAY = 2000;
 const MAX_RETRIES = 3;
+const PAGE_TIMEOUT = 30000;
 
 function getTimestamp() {
   return new Date().toLocaleTimeString("pt-BR");
@@ -33,12 +33,12 @@ app.get("/", (req, res) => {
 app.get("/search", async (req, res) => {
   const searchTerm = req.query.term;
   const maxResults = parseInt(req.query.max) || 100;
+  const results = [];
+  let browser;
 
   if (!searchTerm) {
     return res.status(400).json({ error: "O parâmetro 'term' é obrigatório." });
   }
-
-  let browser;
 
   try {
     logWithTime(`Iniciando nova busca por: ${searchTerm}`);
@@ -57,40 +57,111 @@ app.get("/search", async (req, res) => {
         "--disable-features=IsolateOrigins,site-per-process",
         "--no-zygote",
         "--single-process",
-        "--no-first-run"
+        "--no-first-run",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-breakpad",
+        "--disable-client-side-phishing-detection",
+        "--disable-component-update",
+        "--disable-default-apps",
+        "--disable-domain-reliability",
+        "--disable-hang-monitor",
+        "--disable-ipc-flooding-protection",
+        "--disable-notifications",
+        "--disable-offer-store-unmasked-wallet-cards",
+        "--disable-popup-blocking",
+        "--disable-print-preview",
+        "--disable-prompt-on-repost",
+        "--disable-renderer-backgrounding",
+        "--disable-speech-api",
+        "--disable-sync",
+        "--disable-translate",
+        "--disable-voice-input",
+        "--ignore-certificate-errors",
+        "--metrics-recording-only",
+        "--no-default-browser-check",
+        "--safebrowsing-disable-auto-update",
+        "--no-experiments",
+        "--no-pings",
+        "--js-flags=--max-old-space-size=460",
+        "--memory-pressure-off",
+        "--disable-dev-profile"
       ],
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
-      ignoreHTTPSErrors: true
+      ignoreHTTPSErrors: true,
+      pipe: true,
+      dumpio: true,
+      defaultViewport: {
+        width: 1920,
+        height: 1080
+      }
     });
 
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1920, height: 1080 });
+    const context = await browser.createIncognitoBrowserContext();
+    const page = await context.newPage();
     
-    // Set user agent and language
+    // Limita o uso de recursos
+    await page.setRequestInterception(true);
+    page.on('request', (request) => {
+      if (['image', 'stylesheet', 'font', 'media'].includes(request.resourceType())) {
+        request.abort();
+      } else {
+        request.continue();
+      }
+    });
+
+    // Limpa listeners e cache periodicamente
+    const clearMemory = async () => {
+      if (page && !page.isClosed()) {
+        await page.evaluate(() => {
+          window.gc && window.gc();
+          performance.clearResourceTimings();
+        });
+      }
+    };
+
+    setInterval(clearMemory, 30000);
+
+    await page.setDefaultTimeout(PAGE_TIMEOUT);
+    await page.setDefaultNavigationTimeout(PAGE_TIMEOUT);
+    
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
     await page.setExtraHTTPHeaders({
       'Accept-Language': 'pt-BR,pt;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache'
     });
 
     const url = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
-    await page.goto(url, { waitUntil: "networkidle0" });
     
-    // Wait for results with retry mechanism
-    let retries = 0;
-    while (retries < MAX_RETRIES) {
+    // Tenta carregar a página várias vezes se necessário
+    let pageLoaded = false;
+    for (let attempt = 0; attempt < 3 && !pageLoaded; attempt++) {
       try {
-        await page.waitForSelector(".Nv2PK", { timeout: 30000 });
-        break;
+        await page.goto(url, { 
+          waitUntil: ["networkidle0", "domcontentloaded"],
+          timeout: PAGE_TIMEOUT 
+        });
+        pageLoaded = true;
       } catch (error) {
-        retries++;
-        if (retries === MAX_RETRIES) throw error;
-        logWithTime(`Tentativa ${retries} de ${MAX_RETRIES} para carregar resultados...`);
+        logWithTime(`Tentativa ${attempt + 1} de carregar a página falhou: ${error.message}`);
         await sleep(2000);
       }
     }
 
-    const results = [];
+    if (!pageLoaded) {
+      throw new Error("Não foi possível carregar a página após várias tentativas");
+    }
 
+    // Espera os resultados aparecerem
+    await page.waitForSelector(".Nv2PK", { timeout: PAGE_TIMEOUT });
+    
     async function processVisibleCards() {
       const cards = await page.$$(".Nv2PK");
       logWithTime(`Encontrados ${cards.length} cards visíveis`);
@@ -104,34 +175,20 @@ app.get("/search", async (req, res) => {
           
           await sleep(1000);
 
-          // Tenta clicar no card com múltiplas estratégias
-          let clicked = false;
-          try {
-            await cards[i].click();
-            clicked = true;
-          } catch (error) {
-            try {
-              await page.evaluate(card => card.click(), cards[i]);
-              clicked = true;
-            } catch (error2) {
-              try {
-                const selector = await cards[i].evaluate(el => {
-                  const link = el.querySelector('a');
-                  return link ? link.href : null;
-                });
-                if (selector) {
-                  await page.goto(selector, { waitUntil: 'networkidle0' });
-                  clicked = true;
-                }
-              } catch (error3) {
-                throw new Error('Não foi possível clicar no card de nenhuma forma');
-              }
+          // Tenta clicar no card
+          await Promise.race([
+            cards[i].click(),
+            page.evaluate(card => card.click(), cards[i])
+          ]).catch(async () => {
+            // Se falhar, tenta clicar pelo href
+            const href = await cards[i].evaluate(el => {
+              const link = el.querySelector('a');
+              return link ? link.href : null;
+            });
+            if (href) {
+              await page.goto(href, { waitUntil: "networkidle0" });
             }
-          }
-
-          if (!clicked) {
-            continue;
-          }
+          });
 
           // Espera os detalhes carregarem
           await Promise.race([
@@ -139,7 +196,7 @@ app.get("/search", async (req, res) => {
             page.waitForSelector("h1.fontHeadlineLarge", { timeout: 5000 })
           ]);
 
-          // Captura os detalhes com múltiplos seletores
+          // Captura os detalhes
           const details = await page.evaluate(() => {
             const getTextContent = (selectors) => {
               for (const selector of selectors) {
@@ -189,16 +246,12 @@ app.get("/search", async (req, res) => {
 
         } catch (error) {
           logWithTime(`Erro ao processar card ${i}: ${error.message}`);
+          // Tenta voltar à lista em caso de erro
           try {
-            const isOnList = await page.$(".Nv2PK");
-            if (!isOnList) {
-              await page.goBack({ waitUntil: "networkidle0" });
-              await page.waitForSelector(".Nv2PK", { timeout: 5000 });
-            }
+            await page.goto(url, { waitUntil: "networkidle0" });
+            await page.waitForSelector(".Nv2PK", { timeout: 5000 });
           } catch (navError) {
-            logWithTime(`Erro ao navegar de volta: ${navError.message}`);
-            // Tenta recarregar a página em caso de erro
-            await page.reload({ waitUntil: "networkidle0" });
+            logWithTime(`Erro ao navegar: ${navError.message}`);
           }
         }
 
@@ -206,8 +259,16 @@ app.get("/search", async (req, res) => {
       }
     }
 
-    async function scrollPage() {
-      return await page.evaluate(() => {
+    // Loop principal: processa os cards visíveis
+    let previousHeight = 0;
+    let sameHeightCount = 0;
+    const maxAttempts = 10;
+
+    for (let attempt = 0; attempt < maxAttempts && results.length < maxResults; attempt++) {
+      await processVisibleCards();
+
+      // Rola a página
+      const currentHeight = await page.evaluate(() => {
         const container = document.querySelector('div[role="feed"]');
         if (container) {
           const previousHeight = container.scrollHeight;
@@ -215,35 +276,17 @@ app.get("/search", async (req, res) => {
             top: container.scrollHeight,
             behavior: 'smooth'
           });
-          return { previousHeight, success: true };
+          return previousHeight;
         }
-        return { success: false };
+        return 0;
       });
-    }
 
-    // Loop principal: rola e processa
-    let previousHeight = 0;
-    let sameHeightCount = 0;
-    const maxAttempts = 15;
-
-    for (let attempt = 0; attempt < maxAttempts && results.length < maxResults; attempt++) {
-      await processVisibleCards();
-
-      const scrollResult = await scrollPage();
-      if (!scrollResult.success) {
-        logWithTime("Não foi possível encontrar o container de rolagem");
-        break;
-      }
-
-      const currentHeight = await page.evaluate(() => {
-        const container = document.querySelector('div[role="feed"]');
-        return container ? container.scrollHeight : document.documentElement.scrollHeight;
-      });
+      await sleep(2000);
 
       if (currentHeight === previousHeight) {
         sameHeightCount++;
         if (sameHeightCount >= 3) {
-          logWithTime("Altura estabilizou, finalizando...");
+          logWithTime("Fim da rolagem atingido");
           break;
         }
       } else {
@@ -268,7 +311,10 @@ app.get("/search", async (req, res) => {
       await browser.close();
       logWithTime("Navegador fechado após erro");
     }
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ 
+      error: error.message,
+      results: results // Retorna resultados parciais mesmo em caso de erro
+    });
   }
 });
 
@@ -277,7 +323,6 @@ const server = app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
 
-// Configura timeout do servidor
 server.timeout = 300000; // 5 minutos
 server.keepAliveTimeout = 300000;
 server.headersTimeout = 301000;
