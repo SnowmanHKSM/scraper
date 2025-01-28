@@ -118,67 +118,106 @@ app.get("/search", async (req, res) => {
     const results = await page.evaluate(() => {
       const elements = document.querySelectorAll(".Nv2PK");
       return Array.from(elements).map((el) => {
-        // Nome do estabelecimento - usando o seletor específico do título
-        const name = el.querySelector("h3.fontHeadlineSmall")?.textContent.trim()
-          .replace(/\s+/g, ' ') || "Nome não encontrado";
-        
-        // Endereço - procura pelo elemento com o ícone de localização
+        // Nome do estabelecimento
+        const nameElement = el.querySelector("h3.fontHeadlineSmall, .qBF1Pd");
+        const name = nameElement ? nameElement.textContent.trim() : "Nome não encontrado";
+
+        // Endereço - Limpando e organizando
         let address = "Endereço não encontrado";
         const addressElement = el.querySelector('button[data-item-id*="address"], div[class*="fontBodyMedium"]');
         if (addressElement) {
-          address = addressElement.textContent.trim()
-            .replace(/^(Barbearia|Barber\s*Shop|Salão)[\s·]*/, '')
-            .replace(/·/g, '')
-            .replace(/\s+/g, ' ')
-            .trim();
+          const fullText = addressElement.textContent.trim();
+          // Separando o endereço das informações adicionais
+          const parts = fullText.split(/(?:Fechado|Aberto|⋅)/);
+          if (parts.length > 0) {
+            // Remove nome do estabelecimento e informações extras
+            address = parts[0].replace(/^.*?(?=R\.|Av\.|Rua|Alameda|Travessa|Praça)/i, '')
+              .replace(/Barbearia/g, '')
+              .replace(/\d+,\d+\(\d+\)/g, '')  // Remove avaliações (ex: 4,8(271))
+              .replace(/·/g, '')
+              .replace(/\s+/g, ' ')
+              .trim();
+          }
         }
 
-        // Telefone - usando o seletor específico para botões de telefone
+        // Telefone - Nova implementação
         let phone = "Telefone não encontrado";
-        const phoneButton = el.querySelector('button[data-item-id*="phone:tel"], button[data-tooltip*="Ligar"]');
+        const phoneButton = el.querySelector('button[data-item-id^="phone"]');
         if (phoneButton) {
-          const phoneText = phoneButton.getAttribute('aria-label') || phoneButton.textContent;
+          const phoneText = phoneButton.getAttribute("aria-label");
           if (phoneText) {
-            const cleanPhone = phoneText
-              .replace(/[^\d]/g, '')  // Remove tudo exceto números
-              .replace(/^(?!55)/, '55');  // Adiciona 55 se não existir
-              
-            if (cleanPhone.length >= 11) {
-              const parts = [
-                '+' + cleanPhone.slice(0, 2),  // +55
-                cleanPhone.slice(2, 4),        // DDD
-                cleanPhone.slice(4, 8),        // Primeira parte
-                cleanPhone.slice(8, 12)        // Segunda parte
-              ];
-              phone = `${parts[0]} ${parts[1]} ${parts[2]}-${parts[3]}`;
+            phone = phoneText.replace(/^Telefone:\s*/, "").trim();
+            
+            // Se encontrou o telefone, formata ele
+            if (phone !== "Telefone não encontrado") {
+              const numbers = phone.replace(/[^\d]/g, '');
+              if (numbers.length >= 10) {
+                const formatted = numbers.replace(/^(?!55)/, '55')
+                                       .replace(/^55(\d{2})(\d{4,5})(\d{4})$/, '+55 $1 $2-$3');
+                if (formatted.length >= 16) {
+                  phone = formatted;
+                }
+              }
             }
           }
         }
 
-        // Website - procura por links e botões específicos
+        // Se não encontrou pelo método principal, tenta pelos métodos alternativos
+        if (phone === "Telefone não encontrado") {
+          const phoneElements = [
+            ...el.querySelectorAll('button[data-tooltip*="Ligar"]'),
+            ...el.querySelectorAll('button[aria-label*="telefone"]'),
+            ...el.querySelectorAll('[data-item-id*="phone"]')
+          ];
+
+          for (const phoneEl of phoneElements) {
+            let phoneText = phoneEl.getAttribute('aria-label') || 
+                           phoneEl.getAttribute('data-item-id') || 
+                           phoneEl.textContent;
+            
+            if (phoneText) {
+              const numbers = phoneText.replace(/[^\d]/g, '');
+              if (numbers.length >= 10) {
+                const formatted = numbers.replace(/^(?!55)/, '55')
+                                       .replace(/^55(\d{2})(\d{4,5})(\d{4})$/, '+55 $1 $2-$3');
+                if (formatted.length >= 16) {
+                  phone = formatted;
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        // Website - Melhorando a captura
         let website = "Site não encontrado";
         const websiteElements = [
-          ...el.querySelectorAll('a[data-item-id*="authority"], a[data-item-id*="website"]'),
-          ...el.querySelectorAll('button[data-item-id*="authority"], button[data-item-id*="website"]'),
+          ...el.querySelectorAll('a[data-item-id*="authority"]'),
+          ...el.querySelectorAll('a[data-item-id*="website"]'),
+          ...el.querySelectorAll('button[data-item-id*="authority"]'),
           ...el.querySelectorAll('a[href*="http"]:not([href*="google"])')
         ];
         
         for (const element of websiteElements) {
-          const href = element.getAttribute('href') || element.getAttribute('data-url');
+          const href = element.getAttribute('href') || 
+                      element.getAttribute('data-url') || 
+                      element.getAttribute('data-item-id');
+          
           if (href && 
               !href.includes('google.com') && 
               !href.includes('maps.google') &&
               !href.includes('search?')) {
-            website = href.split('?')[0];
+            website = href.split('?')[0].trim();
             break;
           }
         }
 
+        // Retorna os dados organizados
         return {
-          name,
-          address,
+          name: name.replace(/\s+/g, ' ').trim(),
+          address: address.replace(/\s+/g, ' ').trim(),
           phone,
-          website
+          website: website.replace(/\s+/g, ' ').trim()
         };
       });
     });
