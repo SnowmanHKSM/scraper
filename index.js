@@ -118,51 +118,28 @@ app.get("/search", async (req, res) => {
     const results = await page.evaluate(() => {
       const elements = document.querySelectorAll(".Nv2PK");
       return Array.from(elements).map((el) => {
-        // Debug function
-        const logElement = (element, description) => {
-          if (element) {
-            console.log(`Found ${description}:`, {
-              text: element.textContent,
-              classes: element.className,
-              attributes: Array.from(element.attributes).map(attr => `${attr.name}="${attr.value}"`).join(' ')
-            });
-          } else {
-            console.log(`${description} not found`);
-          }
-        };
-
         // Nome do estabelecimento
-        const nameElement = el.querySelector(".qBF1Pd");
-        logElement(nameElement, "Name element");
-        const name = nameElement?.textContent.trim()
+        const name = el.querySelector(".qBF1Pd")?.textContent.trim()
           .replace(/\s+/g, ' ') || "Nome não encontrado";
-
-        // Endereço - agora procura por elementos específicos
+        
+        // Endereço - procura pelo botão que contém o endereço
         let address = "Endereço não encontrado";
-        const addressElements = Array.from(el.querySelectorAll('[role="button"]'));
-        for (const element of addressElements) {
-          const text = element.textContent.trim();
-          logElement(element, "Address candidate");
-          if ((text.includes('R.') || 
-               text.includes('Rua') || 
-               text.includes('Av.') || 
-               text.includes('Avenida')) &&
-              text.includes(',')) {
-            address = text
+        const addressButton = el.querySelector('button[data-item-id*="address"]');
+        if (addressButton) {
+          const addressDiv = addressButton.querySelector('.Io6YTe');
+          if (addressDiv) {
+            address = addressDiv.textContent.trim()
               .replace(/^(Barbearia|Barber\s*Shop|Salão)[\s·]*/, '')
               .replace(/·/g, '')
               .replace(/\s+/g, ' ')
               .trim();
-            break;
           }
         }
 
-        // Telefone - usando data-item-id
+        // Telefone - usando o seletor data-item-id específico para telefone
         let phone = "Telefone não encontrado";
-        const phoneButtons = el.querySelectorAll('button[data-item-id*="phone"], button[jsaction*="phone"]');
-        phoneButtons.forEach(btn => logElement(btn, "Phone button"));
-        
-        for (const phoneButton of phoneButtons) {
+        const phoneButton = el.querySelector('button[data-item-id*="phone:tel"]');
+        if (phoneButton) {
           const phoneDiv = phoneButton.querySelector('.Io6YTe');
           if (phoneDiv) {
             const phoneText = phoneDiv.textContent.trim();
@@ -181,37 +158,33 @@ app.get("/search", async (req, res) => {
                   cleanPhone.slice(8, 12)        // Segunda parte
                 ];
                 phone = `${parts[0]} ${parts[1]} ${parts[2]}-${parts[3]}`;
-                break;
               }
             }
           }
         }
 
-        // Website - procura por links e elementos com URLs
+        // Website - procura primeiro pelo botão específico do website
         let website = "Site não encontrado";
-        const websiteElements = [
-          ...el.querySelectorAll('a[data-item-id*="website"]'),
-          ...el.querySelectorAll('button[data-item-id*="authority"]'),
-          ...el.querySelectorAll('a[href*="http"]')
-        ];
-        
-        websiteElements.forEach(el => logElement(el, "Website candidate"));
-        
-        for (const element of websiteElements) {
-          const href = element.getAttribute('href') || element.getAttribute('data-url');
-          if (href && 
-              !href.includes('google.com') && 
-              !href.includes('maps.google') &&
-              !href.includes('search?')) {
-            website = href.split('?')[0];
-            break;
+        const websiteButton = el.querySelector('button[data-item-id*="authority"]');
+        if (websiteButton) {
+          const websiteDiv = websiteButton.querySelector('.Io6YTe');
+          if (websiteDiv) {
+            website = websiteDiv.textContent.trim();
           }
-          
-          // Se não tem href, procura no texto
-          const text = element.textContent.trim();
-          if (text && (text.includes('.com') || text.includes('.br'))) {
-            website = text.split('?')[0];
-            break;
+        }
+
+        // Se não encontrou pelo botão, procura por links
+        if (website === "Site não encontrado") {
+          const links = el.querySelectorAll('a[data-item-id*="website"], a[href*="http"]');
+          for (const link of links) {
+            const href = link.getAttribute('href');
+            if (href && 
+                !href.includes('google.com') && 
+                !href.includes('maps.google') &&
+                !href.includes('search?')) {
+              website = href.split('?')[0];
+              break;
+            }
           }
         }
 
