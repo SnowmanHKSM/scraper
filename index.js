@@ -116,39 +116,46 @@ app.get("/search", async (req, res) => {
     const results = await page.evaluate(() => {
       const elements = document.querySelectorAll(".Nv2PK");
       return Array.from(elements).map((el) => {
-        // Nome do estabelecimento (mesmo seletor do Selenium)
+        // Nome do estabelecimento
         const name = el.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não encontrado";
         
-        // Endereço (usando seletor do Selenium)
+        // Endereço - tenta diferentes seletores
         let address = "Endereço não encontrado";
-        const addressElement = el.querySelector('button[data-item-id*="address"]');
+        const addressElement = el.querySelector('.W4Efsd:nth-child(2)') || 
+                             el.querySelector('[data-tooltip]') ||
+                             el.querySelector('button[data-item-id="address"]');
         if (addressElement) {
           address = addressElement.textContent.trim();
         }
         
-        // Telefone (usando seletor do Selenium)
+        // Telefone
         let phone = "Telefone não encontrado";
-        const phoneElement = el.querySelector('button[data-item-id*="phone"]');
+        const phoneElement = el.querySelector('button[data-tooltip*="("]') || 
+                           el.querySelector('button[data-item-id*="phone"]') ||
+                           el.querySelector('button[data-item-id="phone:tel"]');
         if (phoneElement) {
           phone = phoneElement.textContent.trim();
         }
         
-        // Website (usando seletor do Selenium)
+        // Site
         let website = "Site não encontrado";
-        const websiteElement = el.querySelector('a[aria-label*="Visitar site"], a[aria-label*="Visit site"]');
+        const websiteElement = el.querySelector('a[data-tooltip*="site"]') || 
+                             el.querySelector('a[data-item-id*="authority"]') ||
+                             el.querySelector('a[data-item-id="authority"]');
         if (websiteElement && websiteElement.href) {
           website = websiteElement.href;
         }
         
-        // Rating (mesmo seletor do Selenium)
+        // Avaliação
         const rating = el.querySelector(".MW4etd")?.textContent.trim() || "Sem avaliação";
         
-        // Reviews (mesmo seletor do Selenium)
+        // Número de avaliações
         const reviews = el.querySelector(".UY7F9")?.textContent.replace(/[()]/g, "").trim() || "0";
 
-        // Horário
+        // Horário de funcionamento
         let hours = "Horário não disponível";
-        const hoursElement = el.querySelector('button[data-item-id*="oh"]');
+        const hoursElement = el.querySelector('[data-tooltip*="Horário"]') ||
+                           el.querySelector('button[data-item-id*="oh"]');
         if (hoursElement) {
           hours = hoursElement.textContent.trim();
         }
