@@ -124,11 +124,22 @@ app.get("/search", async (req, res) => {
         
         // Endereço - procura por padrões de endereço
         let address = "Endereço não encontrado";
-        const addressPattern = /(R\.|Rua|Av\.|Avenida|Al\.|Alameda|Rod\.|Rodovia|Travessa|Praça)[\s\S]+?(,\s*[\w\s-]+\s*-\s*RS|,\s*Porto\s+Alegre)/i;
         for (const text of allTexts) {
-          const match = text.match(addressPattern);
-          if (match) {
-            address = match[0].trim();
+          // Remove telefones e horários do texto para não confundir
+          const cleanText = text
+            .replace(/(\+\d{2}\s?)?\(?\d{2}\)?\s?\d{4,5}[-\s]?\d{4}/g, '')
+            .replace(/(Aberto|Fechado|Fecha|Abre)(\s+24\s+horas|\s+até|\s+às|\s+\d{1,2}:\d{2})/g, '')
+            .trim();
+
+          // Verifica se o texto parece um endereço
+          if (
+            (cleanText.match(/^(R\.|Rua|Av\.|Avenida|Al\.|Alameda|Rod\.|Rodovia|Travessa|Praça)/i) ||
+             cleanText.match(/Porto Alegre/i) ||
+             cleanText.match(/RS/i)) &&
+            !cleanText.match(/^(Aberto|Fechado|Fecha|Abre)/i) && // Não é um horário
+            cleanText.length > 10 // Evita textos muito curtos
+          ) {
+            address = cleanText;
             break;
           }
         }
@@ -139,19 +150,20 @@ app.get("/search", async (req, res) => {
         for (const text of allTexts) {
           const match = text.match(phonePattern);
           if (match) {
-            phone = match[0].trim().replace(/^\+55\s*/, '');
+            phone = match[0].trim()
+              .replace(/^\+55\s*/, '')
+              .replace(/[\(\)]/g, '');
             break;
           }
         }
         
         // Site - procura por links que não sejam do Google Maps
         let website = "Site não encontrado";
-        const allLinks = el.querySelectorAll('a[href]');
+        const allLinks = Array.from(el.querySelectorAll('a[href]'));
         for (const link of allLinks) {
           const href = link.href;
           if (href && 
-              !href.includes('google.com/maps') && 
-              !href.includes('google.com/search') &&
+              !href.includes('google.com') && 
               (href.startsWith('http://') || href.startsWith('https://'))) {
             website = href;
             break;
@@ -166,16 +178,18 @@ app.get("/search", async (req, res) => {
 
         // Horário de funcionamento - extrai apenas a parte do horário
         let hours = "Horário não disponível";
-        const hoursPattern = /(Aberto|Fechado|Fecha)[\s•]*(?:⋅\s*)?(24 horas|até\s+\d{1,2}:\d{2}|às\s+\d{1,2}:\d{2}|das\s+\d{1,2}:\d{2}\s+às\s+\d{1,2}:\d{2})/i;
         for (const text of allTexts) {
-          const match = text.match(hoursPattern);
-          if (match) {
-            hours = match[0].trim()
+          if (text.match(/(Aberto|Fechado|Fecha)(\s+24\s+horas|\s+até|\s+às|\s+\d{1,2}:\d{2})/i)) {
+            hours = text.split('·')[0].trim()
               .replace(/\s+•\s+/g, ' ')
               .replace(/\s+⋅\s+/g, ' ');
             break;
           }
         }
+
+        // Log para debug
+        console.log('Processando:', name);
+        console.log('Textos encontrados:', allTexts);
 
         return {
           name,
