@@ -113,94 +113,84 @@ app.get("/search", async (req, res) => {
 
     logWithTime(`Iniciando extração de dados de ${previousResultCount} resultados...`);
     // Extrair os dados dos resultados
-    const results = await page.evaluate(() => {
+    const results = await page.evaluate(async () => {
       const elements = document.querySelectorAll(".Nv2PK");
-      return Array.from(elements).map((el) => {
-        // Nome do estabelecimento
-        const name = el.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não encontrado";
-        
-        // Procura por todos os textos informativos
-        const allTexts = Array.from(el.querySelectorAll('.W4Efsd')).map(el => el.textContent.trim());
-        
-        // Endereço - procura por padrões de endereço
-        let address = "Endereço não encontrado";
-        for (const text of allTexts) {
-          // Remove telefones e horários do texto para não confundir
-          const cleanText = text
-            .replace(/(\+\d{2}\s?)?\(?\d{2}\)?\s?\d{4,5}[-\s]?\d{4}/g, '')
-            .replace(/(Aberto|Fechado|Fecha|Abre)(\s+24\s+horas|\s+até|\s+às|\s+\d{1,2}:\d{2})/g, '')
-            .trim();
+      const results = [];
 
-          // Verifica se o texto parece um endereço
-          if (
-            (cleanText.match(/^(R\.|Rua|Av\.|Avenida|Al\.|Alameda|Rod\.|Rodovia|Travessa|Praça)/i) ||
-             cleanText.match(/Porto Alegre/i) ||
-             cleanText.match(/RS/i)) &&
-            !cleanText.match(/^(Aberto|Fechado|Fecha|Abre)/i) && // Não é um horário
-            cleanText.length > 10 // Evita textos muito curtos
-          ) {
-            address = cleanText;
-            break;
+      for (const el of elements) {
+        try {
+          // Nome do estabelecimento
+          const name = el.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não encontrado";
+          
+          // Clica no elemento para abrir os detalhes
+          el.click();
+          
+          // Aguarda os detalhes carregarem
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          // Endereço - usando o mesmo seletor do Python
+          let address = "Endereço não encontrado";
+          const addressButton = document.querySelector('button[data-item-id*="address"]');
+          if (addressButton) {
+            address = addressButton.textContent.trim();
           }
-        }
-        
-        // Telefone - procura por padrões de telefone e limpa o texto
-        let phone = "Telefone não encontrado";
-        const phonePattern = /(?:\+55\s?)?(?:\(?\d{2}\)?[\s-]?)?\d{4,5}[-\s]?\d{4}/;
-        for (const text of allTexts) {
-          const match = text.match(phonePattern);
-          if (match) {
-            phone = match[0].trim()
+          
+          // Telefone - usando o mesmo seletor do Python
+          let phone = "Telefone não encontrado";
+          const phoneButton = document.querySelector('button[data-item-id*="phone"]');
+          if (phoneButton) {
+            phone = phoneButton.textContent.trim()
               .replace(/^\+55\s*/, '')
               .replace(/[\(\)]/g, '');
-            break;
           }
-        }
-        
-        // Site - procura por links que não sejam do Google Maps
-        let website = "Site não encontrado";
-        const allLinks = Array.from(el.querySelectorAll('a[href]'));
-        for (const link of allLinks) {
-          const href = link.href;
-          if (href && 
-              !href.includes('google.com') && 
-              (href.startsWith('http://') || href.startsWith('https://'))) {
-            website = href;
-            break;
+          
+          // Website - usando o mesmo seletor do Python
+          let website = "Site não encontrado";
+          const websiteLink = document.querySelector('a[aria-label*="Visitar site"], a[aria-label*="Visit site"]');
+          if (websiteLink) {
+            website = websiteLink.href;
           }
-        }
-        
-        // Avaliação
-        const rating = el.querySelector(".MW4etd")?.textContent.trim() || "Sem avaliação";
-        
-        // Número de avaliações - limpa os parênteses
-        const reviews = el.querySelector(".UY7F9")?.textContent.replace(/[()]/g, "").trim() || "0";
+          
+          // Avaliação
+          const rating = el.querySelector(".MW4etd")?.textContent.trim() || "Sem avaliação";
+          
+          // Número de avaliações
+          const reviews = el.querySelector(".UY7F9")?.textContent.replace(/[()]/g, "").trim() || "0";
 
-        // Horário de funcionamento - extrai apenas a parte do horário
-        let hours = "Horário não disponível";
-        for (const text of allTexts) {
-          if (text.match(/(Aberto|Fechado|Fecha)(\s+24\s+horas|\s+até|\s+às|\s+\d{1,2}:\d{2})/i)) {
-            hours = text.split('·')[0].trim()
+          // Horário
+          let hours = "Horário não disponível";
+          const hoursButton = document.querySelector('button[data-item-id*="oh"]');
+          if (hoursButton) {
+            hours = hoursButton.textContent.trim()
+              .split('·')[0]
               .replace(/\s+•\s+/g, ' ')
               .replace(/\s+⋅\s+/g, ' ');
-            break;
           }
+
+          // Volta para a lista
+          const backButton = document.querySelector('button[jsaction*="pane.place.backToList"]');
+          if (backButton) {
+            backButton.click();
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+
+          results.push({
+            name,
+            address,
+            phone,
+            website,
+            rating,
+            reviews,
+            hours
+          });
+
+        } catch (error) {
+          console.error('Erro ao processar item:', error);
+          continue;
         }
+      }
 
-        // Log para debug
-        console.log('Processando:', name);
-        console.log('Textos encontrados:', allTexts);
-
-        return {
-          name,
-          address,
-          phone,
-          website,
-          rating,
-          reviews,
-          hours
-        };
-      });
+      return results;
     });
 
     await browser.close();
