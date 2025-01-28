@@ -40,7 +40,7 @@ app.get("/search", async (req, res) => {
     console.log(`Pesquisando: ${searchTerm}`);
 
     // Melhor seletor para os resultados
-    const resultSelector = ".Nv2PK";
+    const resultSelector = "div.Nv2PK";
     await page.waitForSelector(resultSelector, { timeout: 120000 }); // Aumenta o limite para 120 segundos
 
     // Armazenar os resultados
@@ -50,14 +50,40 @@ app.get("/search", async (req, res) => {
     let previousHeight = 0;
     while (true) {
       const results = await page.evaluate(() => {
-        const elements = document.querySelectorAll(".Nv2PK");
+        const elements = document.querySelectorAll("div.Nv2PK");
         return Array.from(elements).map((el) => {
-          const name = el.querySelector(".qBF1Pd.fontHeadlineSmall")?.textContent || "Nome não encontrado";
-          const address = el.querySelector(".W4Efsd")?.textContent || "Endereço não encontrado";
-          const phone = el.querySelector("[data-tooltip='Copiar número de telefone']")?.textContent || "Telefone não encontrado";
-          const website = el.querySelector("[data-value='Website']")?.href || "Site não encontrado";
+          const name = el.querySelector(".qBF1Pd")?.textContent || "Nome não encontrado";
+          const rating = el.querySelector(".MW4etd")?.textContent || "Avaliação não encontrada";
+          const reviews = el.querySelector(".UY7F9")?.textContent || "Não disponível";
 
-          return { name, address, phone, website };
+          const addressButton = document.evaluate(
+            "//button[contains(@data-item-id, 'address')]",
+            document,
+            null,
+            XPathResult.FIRST_ORDERED_NODE_TYPE,
+            null
+          ).singleNodeValue;
+          const address = addressButton?.textContent || "Endereço não encontrado";
+
+          const phoneButton = document.evaluate(
+            "//button[contains(@data-item-id, 'phone')]",
+            document,
+            null,
+            XPathResult.FIRST_ORDERED_NODE_TYPE,
+            null
+          ).singleNodeValue;
+          const phone = phoneButton?.textContent || "Telefone não encontrado";
+
+          const websiteLink = document.evaluate(
+            "//a[contains(@aria-label, 'Visitar site') or contains(@aria-label, 'Visit site')]",
+            document,
+            null,
+            XPathResult.FIRST_ORDERED_NODE_TYPE,
+            null
+          ).singleNodeValue;
+          const website = websiteLink?.href || "Site não encontrado";
+
+          return { name, rating, reviews, address, phone, website };
         });
       });
 
