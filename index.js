@@ -139,7 +139,7 @@ app.get("/search", async (req, res) => {
                 !addressText.includes("Aberto") && 
                 !addressText.includes("Abre")) {
               // Remove o tipo do estabelecimento e limpa o endereço
-              address = addressText
+              let cleanAddress = addressText
                 .split("·") // Divide por ·
                 .map(part => part.trim()) // Remove espaços
                 .filter(part => 
@@ -149,11 +149,18 @@ app.get("/search", async (req, res) => {
                   part !== "" && 
                   !part.includes("Compras na loja")
                 ) // Remove tipos de estabelecimento
+                .filter(part => part.length > 0) // Remove partes vazias
                 .join(" · ") // Junta novamente com ·
-                .trim() // Remove espaços extras
-                .replace(/^\s*·\s*/, ''); // Remove ponto e espaço no início
+                .trim(); // Remove espaços extras
               
-              if (address) break;
+              // Remove qualquer ponto ou espaço no início
+              cleanAddress = cleanAddress.replace(/^[·\s]+/, '');
+              
+              // Se ainda houver conteúdo após a limpeza
+              if (cleanAddress && cleanAddress.length > 0) {
+                address = cleanAddress;
+                break;
+              }
             }
           }
         }
