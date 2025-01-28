@@ -77,6 +77,30 @@ function logWithTime(message) {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Função para rolar a página automaticamente
+async function autoScroll(page) {
+  try {
+    await page.evaluate(async () => {
+      const feed = document.querySelector('div[role="feed"]');
+      if (feed) {
+        const previousHeight = feed.scrollHeight;
+        feed.scrollTo({
+          top: feed.scrollHeight,
+          behavior: 'smooth'
+        });
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        return { previousHeight, success: true };
+      }
+      return { success: false };
+    });
+    
+    await sleep(2000); // Espera adicional após a rolagem
+  } catch (error) {
+    logWithTime(`Erro ao rolar página: ${error.message}`);
+    return { success: false };
+  }
+}
+
 app.get("/", (req, res) => {
   res.send("Bem-vindo ao Scraper Google Maps");
 });
