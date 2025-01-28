@@ -124,8 +124,8 @@ app.get("/search", async (req, res) => {
         const addressSelectors = [
           '.W4Efsd:nth-child(1)', // Primeiro elemento com classe W4Efsd
           'button[data-item-id="address"]', // Botão específico de endereço
-          '[data-tooltip]:not(button)', // Elementos com tooltip que não são botões
-          '.W4Efsd div:not([class])', // Divs sem classe dentro de W4Efsd
+          '[data-tooltip]', // Elementos com tooltip
+          '.W4Efsd > div' // Divs diretos dentro de W4Efsd
         ];
         
         for (const selector of addressSelectors) {
@@ -143,24 +143,17 @@ app.get("/search", async (req, res) => {
             }
           }
         }
-        
-        // Telefone
+
+        // Telefone - procura em todos os elementos de texto
         let phone = "Telefone não encontrado";
-        const phoneSelectors = [
-          'button[data-tooltip*="("]',
-          'button[data-item-id*="phone"]',
-          '.W4Efsd span:contains("+55")',
-          '[data-tooltip*="+55"]'
-        ];
-        
-        for (const selector of phoneSelectors) {
-          const phoneElement = el.querySelector(selector);
-          if (phoneElement) {
-            const phoneText = phoneElement.textContent.trim();
-            if (phoneText.includes("+55")) {
-              phone = phoneText;
-              break;
-            }
+        const allElements = el.querySelectorAll('*');
+        for (const element of allElements) {
+          const text = element.textContent.trim();
+          if (text.includes("+55")) {
+            phone = text.split("·")
+                       .find(part => part.includes("+55"))
+                       ?.trim() || phone;
+            break;
           }
         }
         
@@ -174,11 +167,16 @@ app.get("/search", async (req, res) => {
           if (hoursText.includes("Fechado") || 
               hoursText.includes("Aberto") || 
               hoursText.includes("Abre")) {
-            hours = hoursText.split("·")
-                            .find(part => part.includes("Fechado") || 
-                                        part.includes("Aberto") || 
-                                        part.includes("Abre"))
-                            ?.trim() || hours;
+            const hoursParts = hoursText.split("·");
+            for (const part of hoursParts) {
+              const trimmed = part.trim();
+              if (trimmed.includes("Fechado") || 
+                  trimmed.includes("Aberto") || 
+                  trimmed.includes("Abre")) {
+                hours = trimmed;
+                break;
+              }
+            }
           }
         }
         
