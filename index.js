@@ -78,19 +78,47 @@ app.get("/search", async (req, res) => {
     const url = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
     await page.goto(url, { waitUntil: "networkidle2" });
 
-    // Espera os resultados carregarem
-    await page.waitForSelector('div[role="article"]', { timeout: 10000 })
-      .then(() => logWithTime(`Resultados encontrados usando seletor: div[role="article"]`))
-      .catch(() => {
-        throw new Error("Não foi possível carregar os resultados");
-      });
+    // Lista de possíveis seletores
+    const possibleSelectors = [
+      '.Nv2PK',
+      'div[role="article"]',
+      'a[href^="https://www.google.com/maps/place"]',
+      'div[jsaction*="mouseover:pane.proxy"]'
+    ];
+
+    // Tenta encontrar um seletor que funcione
+    let workingSelector = null;
+    let retries = 0;
+    
+    while (!workingSelector && retries < 3) {
+      for (const selector of possibleSelectors) {
+        try {
+          await page.waitForSelector(selector, { timeout: 5000 });
+          workingSelector = selector;
+          logWithTime(`Resultados encontrados usando seletor: ${selector}`);
+          break;
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      if (!workingSelector) {
+        retries++;
+        logWithTime(`Tentativa ${retries} de encontrar resultados...`);
+        await sleep(2000);
+      }
+    }
+
+    if (!workingSelector) {
+      throw new Error("Não foi possível carregar os resultados");
+    }
 
     const results = [];
     let noNewResultsCount = 0;
     const maxScrolls = 20;
 
     for (let scrollCount = 0; scrollCount < maxScrolls && results.length < maxResults && noNewResultsCount < 3; scrollCount++) {
-      const cards = await page.$$('div[role="article"]');
+      const cards = await page.$$(workingSelector);
       logWithTime(`Encontrados ${cards.length} cards visíveis`);
 
       for (const card of cards) {
@@ -110,7 +138,7 @@ app.get("/search", async (req, res) => {
           processedItems.add(cardId);
 
           await card.click();
-          await sleep(RATE_LIMIT_DELAY);
+          await sleep(3000); // Aumentado para 3 segundos
 
           const data = await page.evaluate(() => {
             const getTextContent = (selectors) => {
@@ -217,7 +245,7 @@ app.get("/search", async (req, res) => {
       await sleep(3000);
 
       // Verifica se novos resultados foram carregados
-      const newCards = await page.$$('div[role="article"]');
+      const newCards = await page.$$(workingSelector);
       if (newCards.length === cards.length) {
         noNewResultsCount++;
       } else {
