@@ -4,8 +4,8 @@ const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 puppeteer.use(StealthPlugin());
 
 const app = express();
-const RATE_LIMIT_DELAY = 2000; // Delay entre cada processamento de card
-const MAX_RETRIES = 3; // Número máximo de tentativas para operações que falham
+const RATE_LIMIT_DELAY = 2000;
+const MAX_RETRIES = 3;
 
 function getTimestamp() {
   return new Date().toLocaleTimeString("pt-BR");
@@ -15,8 +15,7 @@ function logWithTime(message) {
   console.log(`[${getTimestamp()}] ${message}`);
 }
 
-// Sleep utility function
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 app.get("/", (req, res) => {
   res.send("Bem-vindo ao Scraper Google Maps");
@@ -24,7 +23,7 @@ app.get("/", (req, res) => {
 
 app.get("/search", async (req, res) => {
   const searchTerm = req.query.term;
-  const maxResults = parseInt(req.query.max) || 100; // Limite de resultados
+  const maxResults = parseInt(req.query.max) || 100;
 
   if (!searchTerm) {
     return res.status(400).json({ error: "O parâmetro 'term' é obrigatório." });
@@ -37,7 +36,8 @@ app.get("/search", async (req, res) => {
     logWithTime("Iniciando navegador...");
 
     browser = await puppeteer.launch({
-      headless: true, // Mantenha como true no Railway
+      headless: "new",
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -50,32 +50,47 @@ app.get("/search", async (req, res) => {
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1920, height: 1080 });
-
-    // Configurações de cabeçalho e user-agent
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    );
+    
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
     await page.setExtraHTTPHeaders({
-      "Accept-Language": "pt-BR,pt;q=0.9",
+      'Accept-Language': 'pt-BR,pt;q=0.9',
     });
 
-    const url = `https://www.google.com/maps/search/${encodeURIComponent(
-      searchTerm
-    )}`;
-    await page.goto(url, { waitUntil: "networkidle0" });
-
-    // Aguarda carregar os resultados
+    const url = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
+    await page.goto(url, { waitUntil: "networkidle2" });
+    
     let retries = 0;
     while (retries < MAX_RETRIES) {
       try {
-        await page.waitForSelector(".Nv2PK", { timeout: 30000 });
+        // Tenta diferentes seletores que podem indicar que os resultados carregaram
+        const selectors = [
+          'div[role="article"]',
+          '.Nv2PK',
+          'a[href^="https://www.google.com/maps/place"]',
+          'div[jsaction*="mouseover:pane.proxy"]'
+        ];
+        
+        for (const selector of selectors) {
+          try {
+            await page.waitForSelector(selector, { timeout: 10000 });
+            logWithTime(`Resultados encontrados usando seletor: ${selector}`);
+            // Se encontrou um seletor válido, ajusta o seletor global
+            global.CARD_SELECTOR = selector;
+            break;
+          } catch (e) {
+            continue;
+          }
+        }
+        
+        if (!global.CARD_SELECTOR) {
+          throw new Error("Nenhum seletor válido encontrado");
+        }
+        
         break;
       } catch (error) {
         retries++;
         if (retries === MAX_RETRIES) throw error;
-        logWithTime(
-          `Tentativa ${retries} de ${MAX_RETRIES} para carregar resultados...`
-        );
+        logWithTime(`Tentativa ${retries} de ${MAX_RETRIES} para carregar resultados...`);
         await sleep(2000);
       }
     }
@@ -84,153 +99,213 @@ app.get("/search", async (req, res) => {
     let processedItems = new Set();
 
     async function processVisibleCards() {
-      const cards = await page.$$(".Nv2PK");
-      logWithTime(`Encontrados ${cards.length} cards visíveis`);
+      try {
+        await page.waitForSelector(global.CARD_SELECTOR, { timeout: 5000 });
+        
+        const cards = await page.$$(global.CARD_SELECTOR);
+        logWithTime(`Encontrados ${cards.length} cards visíveis`);
 
-      for (let i = 0; i < cards.length && results.length < maxResults; i++) {
-        try {
-          // Verifica se já processamos este card
-          const cardId = await page.evaluate(
-            (el) => el.dataset.cardId || el.textContent,
-            cards[i]
-          );
-          if (processedItems.has(cardId)) {
-            continue;
-          }
+        let processedCount = 0;
 
-          // Rola até o card com smooth scrolling
-          await page.evaluate((card) => {
-            card.scrollIntoView({ behavior: "smooth", block: "center" });
-          }, cards[i]);
+        for (let i = 0; i < cards.length && results.length < maxResults; i++) {
+          try {
+            const isValid = await page.evaluate(card => {
+              return card.isConnected && document.contains(card);
+            }, cards[i]).catch(() => false);
 
-          await sleep(RATE_LIMIT_DELAY);
+            if (!isValid) {
+              continue;
+            }
 
-          // Tenta clicar no card com retry mechanism
-          let clickSuccess = false;
-          for (let retry = 0; retry < MAX_RETRIES && !clickSuccess; retry++) {
+            // Tenta diferentes maneiras de obter o ID do card
+            const cardId = await page.evaluate(card => {
+              const nameElement = card.querySelector('div[role="heading"]') || 
+                                card.querySelector('.qBF1Pd') ||
+                                card.querySelector('.fontHeadlineSmall');
+              return nameElement ? nameElement.textContent : null;
+            }, cards[i]);
+
+            if (!cardId || processedItems.has(cardId)) {
+              continue;
+            }
+
+            // Tenta diferentes maneiras de clicar no card
             try {
               await cards[i].click();
-              clickSuccess = true;
-            } catch (error) {
-              if (retry === MAX_RETRIES - 1) throw error;
-              await sleep(1000);
+            } catch (clickError) {
+              // Se falhar, tenta clicar usando JavaScript
+              await page.evaluate(card => {
+                card.click();
+              }, cards[i]);
             }
-          }
+            
+            await sleep(2000);
 
-          await page.waitForSelector("h1.DUwDvf", { timeout: 5000 });
+            const details = await page.evaluate(() => {
+              const getTextContent = (selectors) => {
+                for (const selector of selectors) {
+                  const element = document.querySelector(selector);
+                  if (element) {
+                    const text = element.textContent.trim();
+                    if (text) return text;
+                  }
+                }
+                return null;
+              };
 
-          // Captura os detalhes com verificações mais robustas
-          const details = await page.evaluate(() => {
-            const getTextContent = (selector) => {
-              const element = document.querySelector(selector);
-              return element ? element.textContent.trim() : null;
-            };
+              const nameSelectors = [
+                'h1.DUwDvf',
+                'div[role="heading"]',
+                '.fontHeadlineLarge',
+                '.qBF1Pd'
+              ];
 
-            const name =
-              getTextContent("h1.DUwDvf") || "Nome não encontrado";
-            const address =
-              document
-                .querySelector('button[data-item-id*="address"]')
-                ?.textContent?.trim() ||
-              "Endereço não encontrado";
+              const addressSelectors = [
+                'button[data-item-id*="address"]',
+                'div[data-item-id*="address"]',
+                '.rogA2c',
+                '.rlpyBL'
+              ];
 
-            const phone =
-              document
-                .querySelector('button[data-item-id^="phone"]')
-                ?.getAttribute("aria-label")
-                ?.replace("Telefone: ", "")
-                ?.trim() || "Telefone não encontrado";
+              const phoneSelectors = [
+                'button[data-item-id^="phone"]',
+                'div[data-item-id^="phone"]',
+                '.rogA2c span',
+                'span[aria-label*="telefone"]'
+              ];
 
-            const website =
-              document.querySelector('a[data-item-id*="authority"]')?.href ||
-              "Site não encontrado";
+              const websiteSelectors = [
+                'a[data-item-id*="authority"]',
+                'a[data-item-id*="website"]',
+                'a[aria-label*="site"]',
+                'a.rogA2c'
+              ];
 
-            const rating =
-              document.querySelector("span.ceNzKf")?.textContent?.trim() ||
-              "Sem avaliação";
-            const reviews =
-              document.querySelector("span.F7nice")?.textContent?.trim() ||
-              "0 avaliações";
+              const name = getTextContent(nameSelectors) || "Nome não encontrado";
+              const address = getTextContent(addressSelectors) || "Endereço não encontrado";
+              
+              // Tratamento especial para telefone
+              let phone = null;
+              for (const selector of phoneSelectors) {
+                const element = document.querySelector(selector);
+                if (element) {
+                  phone = element.getAttribute("aria-label")?.replace("Telefone: ", "")?.trim() ||
+                         element.textContent.trim();
+                  if (phone) break;
+                }
+              }
+              phone = phone || "Telefone não encontrado";
 
-            return { name, address, phone, website, rating, reviews };
-          });
+              // Tratamento especial para website
+              let website = null;
+              for (const selector of websiteSelectors) {
+                const element = document.querySelector(selector);
+                if (element && element.href) {
+                  website = element.href;
+                  break;
+                }
+              }
+              website = website || "Site não encontrado";
 
-          logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
-          results.push(details);
-          processedItems.add(cardId);
+              return { name, address, phone, website };
+            });
 
-          // Volta para a lista com retry mechanism
-          let backSuccess = false;
-          for (
-            let retry = 0;
-            retry < MAX_RETRIES && !backSuccess;
-            retry++
-          ) {
+            if (details.name !== "Nome não encontrado") {
+              results.push(details);
+              processedItems.add(cardId);
+              processedCount++;
+              logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
+            }
+
             try {
-              await page.goBack({ waitUntil: "networkidle0" });
-              await page.waitForSelector(".Nv2PK", { timeout: 5000 });
-              backSuccess = true;
-            } catch (error) {
-              if (retry === MAX_RETRIES - 1) throw error;
+              await page.keyboard.press('Escape');
               await sleep(1000);
+            } catch (navError) {
+              logWithTime(`Erro ao navegar de volta: ${navError.message}`);
+              await page.reload({ waitUntil: "networkidle2" });
+              await page.waitForSelector(global.CARD_SELECTOR, { timeout: 5000 });
             }
+
+            await sleep(RATE_LIMIT_DELAY);
+          } catch (cardError) {
+            logWithTime(`Erro ao processar card: ${cardError.message}`);
+            continue;
           }
-        } catch (error) {
-          logWithTime(`Erro ao processar card ${i + 1}: ${error.message}`);
         }
 
-        // Rate limiting entre cards
-        await sleep(RATE_LIMIT_DELAY);
+        return processedCount;
+      } catch (error) {
+        logWithTime(`Erro ao processar cards: ${error.message}`);
+        return 0;
       }
     }
 
     async function scrollPage() {
-      const scrollResult = await page.evaluate(() => {
-        const container = document.querySelector('div[role="feed"]');
-        if (container) {
-          container.scrollTo({
-            top: container.scrollHeight,
-            behavior: "smooth",
-          });
-          return true;
-        }
-        return false;
-      });
-
-      await sleep(2000);
-      return scrollResult;
+      try {
+        const scrollResult = await page.evaluate(() => {
+          const feed = document.querySelector('div[role="feed"]');
+          if (feed) {
+            const previousHeight = feed.scrollHeight;
+            feed.scrollTo({
+              top: feed.scrollHeight,
+              behavior: 'smooth'
+            });
+            return { previousHeight, success: true };
+          }
+          return { success: false };
+        });
+        
+        await sleep(2000);
+        return scrollResult;
+      } catch (error) {
+        logWithTime(`Erro ao rolar página: ${error.message}`);
+        return { success: false };
+      }
     }
 
     // Loop principal: rola e processa
-    let previousHeight = 0;
-    let sameHeightCount = 0;
-    const maxAttempts = 15;
+    let totalProcessed = 0;
+    const maxScrolls = 20;
 
-    for (let attempt = 0; attempt < maxAttempts && results.length < maxResults; attempt++) {
-      await processVisibleCards();
-
+    for (let scrollCount = 0; scrollCount < maxScrolls && results.length < maxResults; scrollCount++) {
+      logWithTime(`Rolagem ${scrollCount + 1}`);
       const scrollResult = await scrollPage();
-      if (!scrollResult) {
-        logWithTime("Não foi possível encontrar o container de rolagem");
+
+      if (!scrollResult.success) {
+        logWithTime("Feed não encontrado. Tentando novamente...");
+        await sleep(3000);
+        continue;
+      }
+
+      await sleep(5000); // Espera mais tempo após a rolagem
+
+      const processedNow = await processVisibleCards();
+      if (processedNow) totalProcessed += processedNow;
+
+      if (results.length >= maxResults) {
+        logWithTime("Limite máximo de resultados atingido.");
         break;
       }
 
-      const currentHeight = await page.evaluate(() => {
-        const container = document.querySelector("div[role='feed']");
-        return container ? container.scrollHeight : 0;
-      });
-
-      if (currentHeight === previousHeight) {
-        sameHeightCount++;
-        if (sameHeightCount >= 3) {
-          logWithTime("Altura estabilizou, finalizando...");
-          break;
-        }
-      } else {
-        sameHeightCount = 0;
+      // Verifica se há mais resultados para carregar
+      const currentCardCount = await page.$$(global.CARD_SELECTOR);
+      if (currentCardCount.length === 0) {
+        logWithTime("Nenhum resultado encontrado. Finalizando.");
+        break;
       }
 
-      previousHeight = currentHeight;
+      // Tenta clicar no botão "Ver mais resultados" se existir
+      try {
+        const moreResultsButton = await page.$('button[jsaction*="pane.paginationSection.nextPage"]');
+        if (moreResultsButton) {
+          logWithTime("Clicando em 'Ver mais resultados'...");
+          await moreResultsButton.click();
+          await sleep(3000);
+          continue;
+        }
+      } catch (error) {
+        // Ignora erro se não encontrar o botão
+      }
     }
 
     logWithTime(`Busca finalizada. Total de resultados: ${results.length}`);
@@ -239,8 +314,9 @@ app.get("/search", async (req, res) => {
 
     return res.json({
       total: results.length,
-      results: results,
+      results: results
     });
+
   } catch (error) {
     logWithTime(`Erro durante a execução: ${error.message}`);
     if (browser) {
@@ -251,7 +327,16 @@ app.get("/search", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-});
+// Inicia o servidor apenas se o arquivo for executado diretamente
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  const HOST = '0.0.0.0';
+  
+  app.listen(PORT, HOST, () => {
+    console.log(`Servidor rodando em http://${HOST}:${PORT}`);
+    console.log(`Para fazer uma busca, acesse: http://${HOST}:${PORT}/search?term=sua+busca`);
+  });
+}
+
+// Exporta o app para poder ser usado em testes ou por outros módulos
+module.exports = app;
