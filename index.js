@@ -121,60 +121,46 @@ app.get("/search", async (req, res) => {
                     el.querySelector(".qBF1Pd")?.textContent.trim() || 
                     "Nome não encontrado";
         
-        // Endereço
+        // Endereço - usando a classe exata
         let address = "Endereço não encontrado";
-        const addressElement = el.querySelector('button[data-item-id="address"]');
-        if (addressElement) {
-          const fullAddress = addressElement.getAttribute('aria-label');
-          if (fullAddress) {
-            address = fullAddress.replace(/^Endereço:\s*/, '').trim();
+        const addressDivs = Array.from(el.querySelectorAll('.Io6YTe.fontBodyMedium.kR99db.fdkmkc'));
+        
+        for (const div of addressDivs) {
+          const text = div.textContent.trim();
+          // Verifica se parece um endereço (contém rua, avenida, etc)
+          if (text.match(/R\.|Rua|Av\.|Avenida|Al\.|Alameda|Rod\.|Rodovia/i)) {
+            address = text;
+            break;
           }
         }
 
-        // Se não encontrou o endereço no botão, tenta o elemento W4Efsd
-        if (address === "Endereço não encontrado") {
-          const addressText = el.querySelector('.W4Efsd')?.textContent.trim();
-          if (addressText) {
-            address = addressText
-              .split("·")
-              .map(part => part.trim())
-              .filter(part => 
-                !part.includes("Pet Shop") && 
-                !part.includes("Veterinário") && 
-                !part.includes("Pet store") &&
-                !part.includes("Barbearia") &&
-                part !== "" && 
-                !part.includes("Compras na loja")
-              )
-              .filter(part => part.length > 0)
-              .join(" · ")
-              .trim()
-              .replace(/^[·\s]+/, '');
-          }
-        }
-
-        // Telefone
+        // Telefone - procura em todos os elementos com a classe específica
         let phone = "Telefone não encontrado";
-        const phoneElement = el.querySelector('[data-tooltip="Copiar número de telefone"]');
-        if (phoneElement) {
-          const phoneText = phoneElement.getAttribute('aria-label') || phoneElement.textContent;
-          if (phoneText) {
-            const phoneMatch = phoneText.match(/(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}-?\d{4}/);
-            if (phoneMatch) {
-              phone = phoneMatch[0].trim();
-              if (!phone.startsWith('+55')) {
-                phone = '+55 ' + phone;
-              }
-            }
+        const phoneDivs = Array.from(el.querySelectorAll('.Io6YTe.fontBodyMedium.kR99db.fdkmkc'));
+        
+        for (const div of phoneDivs) {
+          const text = div.textContent.trim();
+          if (text.match(/^\+55\s*\d{2}\s*\d{4,5}-\d{4}$/)) {
+            phone = text;
+            break;
           }
         }
 
-        // Website
+        // Website - usando a classe CsEnBe
         let website = "Site não encontrado";
-        const websiteElement = el.querySelector('[data-value="Website"]') || 
-                             el.querySelector('[data-item-id="authority"]');
-        if (websiteElement) {
-          website = websiteElement.href || websiteElement.getAttribute('data-url') || website;
+        const websiteElements = Array.from(el.querySelectorAll('a.CsEnBe'));
+        
+        for (const element of websiteElements) {
+          const href = element.getAttribute('href');
+          if (href && !href.includes('google.com') && !href.includes('maps.google')) {
+            const domainDiv = element.querySelector('.gSkmPd.fontBodySmall.DshQNd');
+            if (domainDiv) {
+              website = domainDiv.textContent.trim();
+            } else {
+              website = href;
+            }
+            break;
+          }
         }
 
         return {
