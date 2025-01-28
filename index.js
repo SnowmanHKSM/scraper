@@ -115,28 +115,30 @@ app.get("/search", async (req, res) => {
 
     logWithTime(`Iniciando extração de dados de ${previousResultCount} resultados...`);
     // Extrair os dados dos resultados
-    const results = [];
-    const elements = await page.$$('.Nv2PK');
-    
-    for (const el of elements) {
-      try {
-        // Nome
-        const name = await el.$eval("h3.fontHeadlineSmall, .qBF1Pd", e => e ? e.textContent.trim() : "Nome não encontrado");
-        
-        // Endereço
-        const address = await el.$eval('button[data-item-id*="address"], div[class*="fontBodyMedium"]', e => {
-          const fullText = e.textContent.trim();
+    const results = await page.evaluate(() => {
+      const elements = document.querySelectorAll(".Nv2PK");
+      return Array.from(elements).map((el) => {
+        // Nome do estabelecimento
+        const nameElement = el.querySelector("h3.fontHeadlineSmall, .qBF1Pd");
+        const name = nameElement ? nameElement.textContent.trim() : "Nome não encontrado";
+
+        // Endereço - Limpando e organizando
+        let address = "Endereço não encontrado";
+        const addressElement = el.querySelector('button[data-item-id*="address"], div[class*="fontBodyMedium"]');
+        if (addressElement) {
+          const fullText = addressElement.textContent.trim();
+          // Separando o endereço das informações adicionais
           const parts = fullText.split(/(?:Fechado|Aberto|⋅)/);
           if (parts.length > 0) {
-            return parts[0].replace(/^.*?(?=R\.|Av\.|Rua|Alameda|Travessa|Praça)/i, '')
+            // Remove nome do estabelecimento e informações extras
+            address = parts[0].replace(/^.*?(?=R\.|Av\.|Rua|Alameda|Travessa|Praça)/i, '')
               .replace(/Barbearia/g, '')
-              .replace(/\d+,\d+\(\d+\)/g, '')
+              .replace(/\d+,\d+\(\d+\)/g, '')  // Remove avaliações (ex: 4,8(271))
               .replace(/·/g, '')
               .replace(/\s+/g, ' ')
               .trim();
           }
-          return "Endereço não encontrado";
-        }).catch(() => "Endereço não encontrado");
+        }
 
         // Telefone - Clicando no item
         let phone = "Telefone não encontrado";
@@ -150,37 +152,16 @@ app.get("/search", async (req, res) => {
           // Espera um pouco para garantir que o conteúdo carregou
           await new Promise(resolve => setTimeout(resolve, 2000));
           
-          // Tenta diferentes seletores para o telefone
-          const phoneSelectors = [
-            'button[data-item-id*="phone:tel:"]',
-            'button[data-item-id*="phone"]',
-            '[data-tooltip*="phone"]',
-            'button[aria-label*="telefone"]',
-            'button[aria-label*="Telefone"]'
-          ];
-          
-          let phoneElement = null;
-          for (const selector of phoneSelectors) {
-            phoneElement = await page.$(selector);
-            if (phoneElement) break;
-          }
+          // Tenta encontrar o botão do telefone usando a classe CsEnBe
+          const phoneElement = await page.$('button.CsEnBe');
           
           if (phoneElement) {
             phone = await phoneElement.evaluate(e => {
-              // Tenta pegar do data-item-id primeiro
-              const itemId = e.getAttribute('data-item-id');
-              if (itemId && itemId.includes('phone:tel:')) {
-                return itemId.split('phone:tel:')[1];
-              }
-              
-              // Tenta pegar do aria-label
               const ariaLabel = e.getAttribute('aria-label');
-              if (ariaLabel && ariaLabel.includes('telefone')) {
-                return ariaLabel.replace(/[^0-9+]/g, '');
+              if (ariaLabel) {
+                return ariaLabel.replace('Telefone: ', '').trim();
               }
-              
-              // Por último, tenta o texto do elemento
-              return e.textContent.trim().replace(/[^0-9+]/g, '');
+              return e.textContent.trim();
             });
           }
           
@@ -194,44 +175,44 @@ app.get("/search", async (req, res) => {
           phone = "Telefone não encontrado";
         }
 
-        // Website
-        const website = await el.$eval('a[data-item-id*="authority"], a[data-item-id*="website"], button[data-item-id*="authority"], a[href*="http"]:not([href*="google"])', e => {
-          const href = e.getAttribute('href') || e.getAttribute('data-url') || e.getAttribute('data-item-id');
-          if (href && !href.includes('google.com') && !href.includes('maps.google') && !href.includes('search?')) {
-            return href.split('?')[0].trim();
+        // Website - Melhorando a captura
+        let website = "Site não encontrado";
+        const websiteElements = [
+          ...el.querySelectorAll('a[data-item-id*="authority"]'),
+          ...el.querySelectorAll('a[data-item-id*="website"]'),
+          ...el.querySelectorAll('button[data-item-id*="authority"]'),
+          ...el.querySelectorAll('a[href*="http"]:not([href*="google"])')
+        ];
+        
+        for (const element of websiteElements) {
+          const href = element.getAttribute('href') || 
+                      element.getAttribute('data-url') || 
+                      element.getAttribute('data-item-id');
+          
+          if (href && 
+              !href.includes('google.com') && 
+              !href.includes('maps.google') &&
+              !href.includes('search?')) {
+            website = href.split('?')[0].trim();
+            break;
           }
-          return "Site não encontrado";
-        }).catch(() => "Site não encontrado");
+        }
 
-        results.push({
+        // Retorna os dados organizados
+        return {
           name: name.replace(/\s+/g, ' ').trim(),
           address: address.replace(/\s+/g, ' ').trim(),
           phone,
-          website
-        });
-      } catch (error) {
-        console.error('Erro ao processar item:', error);
-      }
-    }
+          website: website.replace(/\s+/g, ' ').trim()
+        };
+      });
+    });
+
+    await browser.close();
+    logWithTime("Navegador fechado com sucesso");
 
     // Retorna os resultados como JSON
     logWithTime(`Busca finalizada! ${results.length} resultados encontrados`);
-    
-    try {
-      // Garante que todas as páginas sejam fechadas
-      const pages = await browser.pages();
-      await Promise.all(pages.map(page => page.close()));
-      
-      // Fecha o navegador
-      await browser.close();
-      logWithTime("Navegador fechado com sucesso");
-      
-      // Força a limpeza de memória
-      global.gc && global.gc();
-    } catch (closeError) {
-      console.error("Erro ao fechar navegador:", closeError);
-    }
-    
     logWithTime("Sistema pronto para nova busca!");
     console.log("----------------------------------------");
     
@@ -242,19 +223,6 @@ app.get("/search", async (req, res) => {
     });
   } catch (error) {
     console.error("Erro ao realizar a pesquisa:", error);
-    
-    // Tenta fechar o navegador mesmo em caso de erro
-    if (browser) {
-      try {
-        const pages = await browser.pages();
-        await Promise.all(pages.map(page => page.close()));
-        await browser.close();
-        logWithTime("Navegador fechado após erro");
-      } catch (closeError) {
-        console.error("Erro ao fechar navegador após erro:", closeError);
-      }
-    }
-    
     logWithTime("Ocorreu um erro durante a busca!");
     logWithTime("Sistema pronto para nova busca!");
     console.log("----------------------------------------");
