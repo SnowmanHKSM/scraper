@@ -144,25 +144,34 @@ app.get("/search", async (req, res) => {
           // Clica no item
           await el.click();
           
-          // Aguarda o painel lateral aparecer e o botão do telefone
-          await page.waitForSelector('div[role="dialog"]', { timeout: 5000 });
-          await page.waitForSelector('button[data-item-id*="phone"]', { timeout: 5000 });
-          
-          // Procura o telefone
-          const phoneElement = await page.$('button[data-item-id*="phone"]');
-          if (phoneElement) {
-            phone = await phoneElement.evaluate(e => {
-              const phoneText = e.getAttribute('data-item-id');
-              if (phoneText && phoneText.includes('phone:tel:')) {
-                return phoneText.split('phone:tel:')[1];
+          // Aguarda o painel lateral aparecer
+          const panel = await page.waitForSelector('div[role="dialog"]', { timeout: 5000 });
+          if (panel) {
+            // Aguarda o botão do telefone dentro do painel
+            await page.waitForSelector('div[role="dialog"] button[data-item-id*="phone"]', { timeout: 5000 });
+            
+            // Procura o telefone especificamente dentro do painel aberto
+            const phoneElement = await panel.$('button[data-item-id*="phone"]');
+            if (phoneElement) {
+              const phoneData = await phoneElement.evaluate(e => ({
+                itemId: e.getAttribute('data-item-id'),
+                ariaLabel: e.getAttribute('aria-label'),
+                text: e.textContent.trim()
+              }));
+              
+              if (phoneData.itemId && phoneData.itemId.includes('phone:tel:')) {
+                phone = phoneData.itemId.split('phone:tel:')[1];
+              } else if (phoneData.ariaLabel && phoneData.ariaLabel.toLowerCase().includes('phone:')) {
+                phone = phoneData.ariaLabel.split(':')[1].trim();
+              } else {
+                phone = phoneData.text;
               }
-              return e.textContent.trim();
-            });
+            }
           }
           
           // Volta para a lista
           await page.keyboard.press('Escape');
-          await page.waitForTimeout(1000);
+          await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
           console.error('Erro ao pegar telefone:', error);
         }
