@@ -1,3 +1,24 @@
+const express = require("express");
+const puppeteer = require("puppeteer");
+
+const app = express();
+
+// Função para timestamp
+function getTimestamp() {
+  return new Date().toLocaleTimeString("pt-BR");
+}
+
+// Log com timestamp
+function logWithTime(message) {
+  console.log(`[${getTimestamp()}] ${message}`);
+}
+
+// Rota raiz
+app.get("/", (req, res) => {
+  res.send("Bem vindo ao Scraper Google Maps");
+});
+
+// Rota de busca no Google Maps
 app.get("/search", async (req, res) => {
   const searchTerm = req.query.term;
 
@@ -6,7 +27,7 @@ app.get("/search", async (req, res) => {
   }
 
   try {
-    console.log(`[${getTimestamp()}] Iniciando busca por: ${searchTerm}`);
+    logWithTime(`Iniciando busca por: ${searchTerm}`);
 
     const browser = await puppeteer.launch({
       headless: "new",
@@ -20,7 +41,6 @@ app.get("/search", async (req, res) => {
     });
 
     await page.waitForSelector('div[role="feed"]');
-
     const scrollableDiv = await page.$('div[role="feed"]');
     let previousResultsCount = 0;
     let maxAttempts = 10;
@@ -43,67 +63,50 @@ app.get("/search", async (req, res) => {
 
     console.log(`Total final de resultados encontrados: ${previousResultsCount}`);
 
-    // Coleta os dados detalhados
-    const results = await page.$$eval("div.Nv2PK", async (listings) => {
-      const resultList = [];
+    const results = await page.evaluate(() => {
+      const listings = document.querySelectorAll("div.Nv2PK");
+      return Array.from(listings).map((listing) => {
+        const name = listing.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não disponível";
+        const rating =
+          listing.querySelector(".MW4etd")?.textContent.trim() || "Avaliação não disponível";
+        const reviews =
+          listing.querySelector(".UY7F9")?.textContent.trim() || "Sem avaliações";
 
-      for (let listing of listings) {
-        try {
-          listing.scrollIntoView({ behavior: "smooth", block: "center" });
+        const address = document
+          .querySelector('button[data-item-id="address"]')
+          ?.getAttribute("aria-label")
+          ?.replace(/^Endereço:\s*/, "")
+          ?.trim() || "Endereço não disponível";
 
-          // Extrai detalhes do elemento atual
-          const name = listing.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não disponível";
-          const rating =
-            listing.querySelector(".MW4etd")?.textContent.trim() || "Avaliação não disponível";
-          const reviews =
-            listing.querySelector(".UY7F9")?.textContent.trim() || "Sem avaliações";
+        const phone = document
+          .querySelector('button[data-item-id="phone"]')
+          ?.getAttribute("aria-label")
+          ?.replace(/^Telefone:\s*/, "")
+          ?.trim() || "Telefone não disponível";
 
-          // Clique para abrir os detalhes
-          listing.click();
-          await new Promise((resolve) => setTimeout(resolve, 2000));
+        const website = document
+          .querySelector('a[href^="http"][aria-label^="Visitar site"]')
+          ?.href || "Site não disponível";
 
-          const address = document
-            .querySelector('button[data-item-id="address"]')
-            ?.getAttribute("aria-label")
-            ?.replace(/^Endereço:\s*/, "")
-            ?.trim() || "Endereço não disponível";
-
-          const phone = document
-            .querySelector('button[data-item-id="phone"]')
-            ?.getAttribute("aria-label")
-            ?.replace(/^Telefone:\s*/, "")
-            ?.trim() || "Telefone não disponível";
-
-          const website = document
-            .querySelector('a[href^="http"][aria-label^="Visitar site"]')
-            ?.href || "Site não disponível";
-
-          resultList.push({ name, rating, reviews, address, phone, website });
-
-          // Volta à lista
-          const backButton = document.querySelector('button[jsaction="pane.place.backToList"]');
-          if (backButton) backButton.click();
-
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-        } catch (e) {
-          console.error(`Erro ao processar um item: ${e}`);
-          continue;
-        }
-      }
-
-      return resultList;
+        return { name, rating, reviews, address, phone, website };
+      });
     });
 
-    console.log(`[${getTimestamp()}] Busca concluída. Resultados extraídos: ${results.length}`);
+    logWithTime("Busca finalizada.");
     await browser.close();
 
-    res.json({
-      term: searchTerm,
-      total: results.length,
-      results,
-    });
+    res.json({ term: searchTerm, total: results.length, results });
   } catch (error) {
     console.error("Erro ao realizar a pesquisa:", error);
     res.status(500).json({ error: "Erro ao realizar a pesquisa.", message: error.message });
   }
+});
+
+// Inicializa o servidor
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("----------------------------------------");
+  logWithTime(`Servidor iniciado na porta ${PORT}`);
+  logWithTime("Sistema pronto para buscas!");
+  console.log("----------------------------------------");
 });
