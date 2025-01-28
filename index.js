@@ -118,8 +118,9 @@ app.get("/search", async (req, res) => {
     const results = await page.evaluate(() => {
       const elements = document.querySelectorAll(".Nv2PK");
       return Array.from(elements).map((el) => {
-        // Nome do estabelecimento
-        const name = el.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não encontrado";
+        // Nome do estabelecimento - remove espaços extras
+        const name = el.querySelector(".qBF1Pd")?.textContent.trim()
+          .replace(/\s+/g, ' ') || "Nome não encontrado";
         
         // Função auxiliar para encontrar texto que corresponda a um padrão
         const findTextByPattern = (element, pattern) => {
@@ -145,23 +146,51 @@ app.get("/search", async (req, res) => {
                  !text.includes('Aberto');
         });
         if (addressText) {
-          address = addressText;
+          // Limpa o endereço removendo "Barbearia" e textos indesejados
+          address = addressText
+            .replace(/^(Barbearia|Barber\s*Shop|Salão)[\s·]*/, '')  // Remove "Barbearia" do início
+            .replace(/·/g, '')  // Remove bullets
+            .replace(/\s+/g, ' ')  // Remove espaços extras
+            .trim();
         }
 
-        // Telefone - procura por qualquer texto que pareça um telefone
+        // Telefone - procura primeiro por números com +55
         let phone = "Telefone não encontrado";
-        const phoneText = findTextByPattern(el, (text) => {
-          // Procura por padrões de telefone: (51) XXXX-XXXX ou +55 51 XXXX-XXXX
-          return /(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}/.test(text) &&
-                 !text.includes('reviews') &&
-                 !text.includes('avaliações');
-        });
-        if (phoneText) {
-          const match = phoneText.match(/(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}/);
-          if (match) {
-            phone = match[0];
-            if (!phone.startsWith('+55')) {
-              phone = '+55 ' + phone;
+        const phonePatterns = [
+          // Primeiro tenta encontrar números com +55
+          (text) => /\+55\s*\d{2}\s*\d{4,5}[-\s]?\d{4}/.test(text),
+          // Depois tenta números com DDD
+          (text) => /\(\d{2}\)\s*\d{4,5}[-\s]?\d{4}/.test(text),
+          // Por último, qualquer número que pareça telefone
+          (text) => /\d{4,5}[-\s]?\d{4}/.test(text)
+        ];
+
+        for (const pattern of phonePatterns) {
+          const phoneText = findTextByPattern(el, (text) => {
+            return pattern(text) &&
+                   !text.includes('reviews') &&
+                   !text.includes('avaliações');
+          });
+
+          if (phoneText) {
+            // Extrai apenas o número do texto
+            const numberMatch = phoneText.match(/(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}[-\s]?\d{4}/);
+            if (numberMatch) {
+              let cleanPhone = numberMatch[0]
+                .replace(/[^\d+]/g, '')  // Remove tudo exceto números e +
+                .replace(/^(?!\+55)/, '+55');  // Adiciona +55 se não existir
+              
+              // Formata o número
+              if (cleanPhone.startsWith('+55')) {
+                const parts = [
+                  cleanPhone.slice(0, 3),  // +55
+                  cleanPhone.slice(3, 5),  // DDD
+                  cleanPhone.slice(5, 9),  // Primeira parte
+                  cleanPhone.slice(9)      // Segunda parte
+                ];
+                phone = `${parts[0]} ${parts[1]} ${parts[2]}-${parts[3]}`;
+              }
+              break;
             }
           }
         }
@@ -176,7 +205,8 @@ app.get("/search", async (req, res) => {
               !href.includes('google.com') && 
               !href.includes('maps.google') &&
               !href.includes('search?')) {
-            website = href;
+            // Limpa a URL removendo parâmetros do Google
+            website = href.split('?')[0];
             break;
           }
         }
@@ -190,7 +220,8 @@ app.get("/search", async (req, res) => {
                    !text.includes('google.com');
           });
           if (websiteText) {
-            website = websiteText;
+            // Limpa a URL
+            website = websiteText.split('?')[0].trim();
           }
         }
 
