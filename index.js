@@ -117,105 +117,73 @@ app.get("/search", async (req, res) => {
       const elements = document.querySelectorAll(".Nv2PK");
       return Array.from(elements).map((el) => {
         // Nome do estabelecimento
-        const name = el.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não encontrado";
+        const name = el.querySelector(".qBF1Pd.fontHeadlineSmall")?.textContent.trim() || "Nome não encontrado";
         
-        // Endereço - tenta vários seletores diferentes
+        // Endereço
         let address = "Endereço não encontrado";
-        
-        // Primeiro tenta pegar o endereço completo do botão de endereço
-        const addressButton = el.querySelector('button[data-item-id="address"]');
-        if (addressButton) {
-          const fullAddress = addressButton.getAttribute('aria-label');
-          if (fullAddress) {
-            address = fullAddress.replace(/^Endereço:\s*/, '').trim();
+        const addressElement = el.querySelector('.W4Efsd');
+        if (addressElement) {
+          const addressText = addressElement.textContent.trim();
+          if (addressText && 
+              !addressText.includes("+55") && 
+              !addressText.includes("Fechado") && 
+              !addressText.includes("Aberto") && 
+              !addressText.includes("Abre")) {
+            
+            // Limpa o endereço
+            address = addressText
+              .split("·")
+              .map(part => part.trim())
+              .filter(part => 
+                !part.includes("Pet Shop") && 
+                !part.includes("Veterinário") && 
+                !part.includes("Pet store") &&
+                !part.includes("Barbearia") &&
+                part !== "" && 
+                !part.includes("Compras na loja")
+              )
+              .filter(part => part.length > 0)
+              .join("")
+              .trim()
+              .replace(/^[·\s]+/, '');
           }
         }
-        
-        // Se não encontrou no botão, tenta outros seletores
-        if (address === "Endereço não encontrado") {
-          const addressSelectors = [
-            '.W4Efsd:nth-child(1)',
-            '[data-tooltip]',
-            '.W4Efsd > div'
-          ];
-          
-          for (const selector of addressSelectors) {
-            const addressElement = el.querySelector(selector);
-            if (addressElement) {
-              const addressText = addressElement.textContent.trim();
-              if (addressText && 
-                  !addressText.includes("+55") && 
-                  !addressText.includes("Fechado") && 
-                  !addressText.includes("Aberto") && 
-                  !addressText.includes("Abre")) {
-                let cleanAddress = addressText
-                  .split("·")
-                  .map(part => part.trim())
-                  .filter(part => 
-                    !part.includes("Pet Shop") && 
-                    !part.includes("Veterinário") && 
-                    !part.includes("Pet store") &&
-                    !part.includes("Barbearia") &&
-                    part !== "" && 
-                    !part.includes("Compras na loja")
-                  )
-                  .filter(part => part.length > 0)
-                  .join(" · ")
-                  .trim()
-                  .replace(/^[·\s]+/, '');
-                
-                if (cleanAddress && cleanAddress.length > 0) {
-                  address = cleanAddress;
-                  break;
-                }
-              }
+
+        // Se não encontrou pelo primeiro método, tenta pelo botão de endereço
+        if (!address || address === "Endereço não encontrado") {
+          const addressButton = el.querySelector('button[data-item-id="address"]');
+          if (addressButton) {
+            const fullAddress = addressButton.getAttribute('aria-label');
+            if (fullAddress) {
+              address = fullAddress.replace(/^Endereço:\s*/, '').trim();
             }
           }
         }
 
-        // Telefone - tenta vários seletores
+        // Telefone
         let phone = "Telefone não encontrado";
-        const phoneSelectors = [
-          'button[data-tooltip*="Ligar"]',
-          'button[data-item-id*="phone"]',
-          '[data-tooltip*="Ligar"]',
-          'a[data-tooltip*="Ligar"]'
-        ];
-
-        for (const selector of phoneSelectors) {
-          const phoneElement = el.querySelector(selector);
-          if (phoneElement) {
-            const phoneText = phoneElement.getAttribute('aria-label') || phoneElement.textContent;
-            if (phoneText) {
-              const phoneMatch = phoneText.match(/(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}-?\d{4}/);
-              if (phoneMatch) {
-                phone = phoneMatch[0].trim();
-                if (!phone.startsWith('+55')) {
-                  phone = '+55 ' + phone;
-                }
-                break;
+        const phoneElement = el.querySelector('[data-tooltip="Copiar número de telefone"]');
+        if (phoneElement) {
+          const phoneText = phoneElement.getAttribute('aria-label') || phoneElement.textContent;
+          if (phoneText) {
+            const phoneMatch = phoneText.match(/(?:\+55\s*)?(?:\(?\d{2}\)?\s*)?\d{4,5}-?\d{4}/);
+            if (phoneMatch) {
+              phone = phoneMatch[0].trim();
+              if (!phone.startsWith('+55')) {
+                phone = '+55 ' + phone;
               }
             }
           }
         }
 
-        // Website - tenta vários seletores
+        // Website
         let website = "Site não encontrado";
-        const websiteSelectors = [
-          'a[data-tooltip*="site"]',
-          'a[data-item-id*="authority"]',
-          'button[data-item-id*="authority"]',
-          'a[href*="http"]'
-        ];
-
-        for (const selector of websiteSelectors) {
-          const websiteElement = el.querySelector(selector);
-          if (websiteElement) {
-            const href = websiteElement.href || websiteElement.getAttribute('data-url');
-            if (href && !href.includes('google.com')) {
-              website = href;
-              break;
-            }
+        const websiteElement = el.querySelector('[data-value="Website"]') || 
+                             el.querySelector('a[data-tooltip*="site"]');
+        if (websiteElement) {
+          const href = websiteElement.href || websiteElement.getAttribute('data-url');
+          if (href && !href.includes('google.com')) {
+            website = href;
           }
         }
         
