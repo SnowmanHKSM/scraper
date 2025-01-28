@@ -118,73 +118,59 @@ app.get("/search", async (req, res) => {
     const results = await page.evaluate(() => {
       const elements = document.querySelectorAll(".Nv2PK");
       return Array.from(elements).map((el) => {
-        // Nome do estabelecimento
-        const name = el.querySelector(".qBF1Pd")?.textContent.trim()
+        // Nome do estabelecimento - usando o seletor específico do título
+        const name = el.querySelector("h3.fontHeadlineSmall")?.textContent.trim()
           .replace(/\s+/g, ' ') || "Nome não encontrado";
         
-        // Endereço - procura pelo botão que contém o endereço
+        // Endereço - procura pelo elemento com o ícone de localização
         let address = "Endereço não encontrado";
-        const addressButton = el.querySelector('button[data-item-id*="address"]');
-        if (addressButton) {
-          const addressDiv = addressButton.querySelector('.Io6YTe');
-          if (addressDiv) {
-            address = addressDiv.textContent.trim()
-              .replace(/^(Barbearia|Barber\s*Shop|Salão)[\s·]*/, '')
-              .replace(/·/g, '')
-              .replace(/\s+/g, ' ')
-              .trim();
-          }
+        const addressElement = el.querySelector('button[data-item-id*="address"], div[class*="fontBodyMedium"]');
+        if (addressElement) {
+          address = addressElement.textContent.trim()
+            .replace(/^(Barbearia|Barber\s*Shop|Salão)[\s·]*/, '')
+            .replace(/·/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
         }
 
-        // Telefone - usando o seletor data-item-id específico para telefone
+        // Telefone - usando o seletor específico para botões de telefone
         let phone = "Telefone não encontrado";
-        const phoneButton = el.querySelector('button[data-item-id*="phone:tel"]');
+        const phoneButton = el.querySelector('button[data-item-id*="phone:tel"], button[data-tooltip*="Ligar"]');
         if (phoneButton) {
-          const phoneDiv = phoneButton.querySelector('.Io6YTe');
-          if (phoneDiv) {
-            const phoneText = phoneDiv.textContent.trim();
-            if (phoneText) {
-              // Limpa e formata o número
-              const cleanPhone = phoneText
-                .replace(/[^\d]/g, '')  // Remove tudo exceto números
-                .replace(/^(?!55)/, '55');  // Adiciona 55 se não existir
+          const phoneText = phoneButton.getAttribute('aria-label') || phoneButton.textContent;
+          if (phoneText) {
+            const cleanPhone = phoneText
+              .replace(/[^\d]/g, '')  // Remove tudo exceto números
+              .replace(/^(?!55)/, '55');  // Adiciona 55 se não existir
               
-              // Formata como +55 DD XXXX-XXXX
-              if (cleanPhone.length >= 11) {
-                const parts = [
-                  '+' + cleanPhone.slice(0, 2),  // +55
-                  cleanPhone.slice(2, 4),        // DDD
-                  cleanPhone.slice(4, 8),        // Primeira parte
-                  cleanPhone.slice(8, 12)        // Segunda parte
-                ];
-                phone = `${parts[0]} ${parts[1]} ${parts[2]}-${parts[3]}`;
-              }
+            if (cleanPhone.length >= 11) {
+              const parts = [
+                '+' + cleanPhone.slice(0, 2),  // +55
+                cleanPhone.slice(2, 4),        // DDD
+                cleanPhone.slice(4, 8),        // Primeira parte
+                cleanPhone.slice(8, 12)        // Segunda parte
+              ];
+              phone = `${parts[0]} ${parts[1]} ${parts[2]}-${parts[3]}`;
             }
           }
         }
 
-        // Website - procura primeiro pelo botão específico do website
+        // Website - procura por links e botões específicos
         let website = "Site não encontrado";
-        const websiteButton = el.querySelector('button[data-item-id*="authority"]');
-        if (websiteButton) {
-          const websiteDiv = websiteButton.querySelector('.Io6YTe');
-          if (websiteDiv) {
-            website = websiteDiv.textContent.trim();
-          }
-        }
-
-        // Se não encontrou pelo botão, procura por links
-        if (website === "Site não encontrado") {
-          const links = el.querySelectorAll('a[data-item-id*="website"], a[href*="http"]');
-          for (const link of links) {
-            const href = link.getAttribute('href');
-            if (href && 
-                !href.includes('google.com') && 
-                !href.includes('maps.google') &&
-                !href.includes('search?')) {
-              website = href.split('?')[0];
-              break;
-            }
+        const websiteElements = [
+          ...el.querySelectorAll('a[data-item-id*="authority"], a[data-item-id*="website"]'),
+          ...el.querySelectorAll('button[data-item-id*="authority"], button[data-item-id*="website"]'),
+          ...el.querySelectorAll('a[href*="http"]:not([href*="google"])')
+        ];
+        
+        for (const element of websiteElements) {
+          const href = element.getAttribute('href') || element.getAttribute('data-url');
+          if (href && 
+              !href.includes('google.com') && 
+              !href.includes('maps.google') &&
+              !href.includes('search?')) {
+            website = href.split('?')[0];
+            break;
           }
         }
 
