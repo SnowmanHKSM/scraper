@@ -5,7 +5,7 @@ const app = express();
 
 // Rota raiz
 app.get("/", (req, res) => {
-  res.send("Bem-vindo ao Scraper Google Maps");
+  res.send("Bem vindo ao Scraper Google Maps");
 });
 
 // Rota de busca no Google Maps
@@ -19,95 +19,62 @@ app.get("/search", async (req, res) => {
   try {
     const browser = await puppeteer.launch({
       headless: true,
-      executablePath: "/usr/bin/google-chrome", // Caminho do Chrome no Docker
+      executablePath: "/usr/bin/google-chrome", // Caminho para o Chrome instalado
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
-        "--lang=pt-BR",
+        "--lang=pt-BR", // Define o idioma do navegador como português
       ],
     });
 
     const page = await browser.newPage();
 
-    // Configura cabeçalhos de idioma
+    // Configura o cabeçalho de idioma
     await page.setExtraHTTPHeaders({
       "Accept-Language": "pt-BR,pt;q=0.9",
     });
 
-    // Gera a URL de pesquisa
+    // Gera a URL de pesquisa do Google Maps
     const url = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
-    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.goto(url, { waitUntil: "networkidle2" });
 
     console.log(`Pesquisando: ${searchTerm}`);
 
-    // Melhor seletor para os resultados
-    const resultSelector = "div.Nv2PK";
-    await page.waitForSelector(resultSelector, { timeout: 120000 }); // Aumenta o limite para 120 segundos
+    // Seletor para os resultados
+    const resultsSelector = "div.Nv2PK";
+    await page.waitForSelector(resultsSelector, { timeout: 60000 }); // Aumenta o tempo limite para o carregamento
 
-    // Armazenar os resultados
-    let allResults = [];
-
-    // Rolar a página para capturar todos os resultados
-    let previousHeight = 0;
+    // Rolar a página até carregar todos os resultados
+    let previousHeight;
     while (true) {
-      const results = await page.evaluate(() => {
-        const elements = document.querySelectorAll("div.Nv2PK");
-        return Array.from(elements).map((el) => {
-          const name = el.querySelector(".qBF1Pd")?.textContent || "Nome não encontrado";
-          const rating = el.querySelector(".MW4etd")?.textContent || "Avaliação não encontrada";
-          const reviews = el.querySelector(".UY7F9")?.textContent || "Não disponível";
-
-          const addressButton = document.evaluate(
-            "//button[contains(@data-item-id, 'address')]",
-            el,
-            null,
-            XPathResult.FIRST_ORDERED_NODE_TYPE,
-            null
-          ).singleNodeValue;
-          const address = addressButton?.textContent || "Endereço não encontrado";
-
-          const phoneButton = document.evaluate(
-            "//button[contains(@data-item-id, 'phone')]",
-            el,
-            null,
-            XPathResult.FIRST_ORDERED_NODE_TYPE,
-            null
-          ).singleNodeValue;
-          const phone = phoneButton?.textContent || "Telefone não encontrado";
-
-          const websiteLink = document.evaluate(
-            "//a[contains(@aria-label, 'Visitar site') or contains(@aria-label, 'Visit site')]",
-            el,
-            null,
-            XPathResult.FIRST_ORDERED_NODE_TYPE,
-            null
-          ).singleNodeValue;
-          const website = websiteLink?.href || "Site não encontrado";
-
-          return { name, rating, reviews, address, phone, website };
-        });
-      });
-
-      allResults = [...allResults, ...results];
-
-      // Rola a página para carregar mais resultados
-      previousHeight = await page.evaluate(() => document.body.scrollHeight);
-      await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-      await new Promise((resolve) => setTimeout(resolve, 3000)); // Aguarda 3 segundos
-      const newHeight = await page.evaluate(() => document.body.scrollHeight);
-
-      if (newHeight === previousHeight) break; // Para se não houver mais resultados
+      previousHeight = await page.evaluate("document.body.scrollHeight");
+      await page.evaluate("window.scrollTo(0, document.body.scrollHeight)");
+      await new Promise((resolve) => setTimeout(resolve, 2000)); // Aguarda 2 segundos entre as rolagens
+      const newHeight = await page.evaluate("document.body.scrollHeight");
+      if (newHeight === previousHeight) break; // Sai do loop se não houver mais resultados
     }
+
+    // Extrair os dados dos resultados
+    const results = await page.evaluate(() => {
+      const elements = document.querySelectorAll("div.Nv2PK");
+      return Array.from(elements).map((el) => {
+        const name = el.querySelector(".qBF1Pd")?.textContent || "Nome não encontrado";
+        const address = el.querySelector("button[data-item-id='address']")?.textContent || "Endereço não encontrado";
+        const phone = el.querySelector("button[data-item-id='phone']")?.textContent || "Telefone não encontrado";
+        const website = el.querySelector("a[data-value='Website']")?.href || "Site não encontrado";
+        const rating = el.querySelector(".MW4etd")?.textContent || "Avaliação não encontrada";
+        const reviews = el.querySelector(".UY7F9")?.textContent || "Nenhuma avaliação";
+
+        return { name, address, phone, website, rating, reviews };
+      });
+    });
 
     await browser.close();
 
-    // Remove duplicados dos resultados
-    const uniqueResults = Array.from(new Map(allResults.map(item => [item.name, item])).values());
-
-    // Retorna os resultados
+    // Retorna os resultados como JSON
     return res.json({
       term: searchTerm,
-      results: uniqueResults,
+      results,
     });
   } catch (error) {
     console.error("Erro ao realizar a pesquisa:", error);
