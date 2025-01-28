@@ -85,39 +85,59 @@ app.get("/search", async (req, res) => {
     let processedItems = new Set();
 
     async function processVisibleCards() {
-      const cards = await page.$$(".Nv2PK");
+      // Aguarda um pouco para o DOM estabilizar
+      await sleep(2000);
+
+      // Usa evaluateHandle para manter a referência aos elementos
+      const cardsHandle = await page.evaluateHandle(() => {
+        return document.querySelectorAll('.Nv2PK');
+      });
+      
+      const cards = await page.evaluate(cardsHandle => {
+        return Array.from(cardsHandle).map(card => {
+          const name = card.querySelector('div.qBF1Pd')?.textContent?.trim();
+          return { element: card, name };
+        });
+      }, cardsHandle);
+
       logWithTime(`Encontrados ${cards.length} cards visíveis`);
 
       for (let i = 0; i < cards.length && results.length < maxResults; i++) {
         try {
-          // Verifica se já processamos este card
-          const cardId = await page.evaluate(el => el.dataset.cardId || el.textContent, cards[i]);
-          if (processedItems.has(cardId)) {
+          // Verifica se já processamos este card pelo nome
+          if (processedItems.has(cards[i].name)) {
             continue;
           }
 
-          // Rola até o card com smooth scrolling
-          await page.evaluate((card) => {
-            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }, cards[i]);
-          
-          await sleep(RATE_LIMIT_DELAY);
-
-          // Tenta clicar no card com retry mechanism
-          let clickSuccess = false;
-          for (let retry = 0; retry < MAX_RETRIES && !clickSuccess; retry++) {
-            try {
-              await cards[i].click();
-              clickSuccess = true;
-            } catch (error) {
-              if (retry === MAX_RETRIES - 1) throw error;
-              await sleep(1000);
+          // Scroll suave até o elemento
+          await page.evaluate((index) => {
+            const cards = document.querySelectorAll('.Nv2PK');
+            if (cards[index]) {
+              cards[index].scrollIntoView({ behavior: 'smooth', block: 'center' });
             }
+          }, i);
+
+          await sleep(1000);
+
+          // Tenta clicar no card usando evaluate
+          const clicked = await page.evaluate((index) => {
+            const cards = document.querySelectorAll('.Nv2PK');
+            if (cards[index]) {
+              cards[index].click();
+              return true;
+            }
+            return false;
+          }, i);
+
+          if (!clicked) {
+            throw new Error('Card não encontrado para clique');
           }
 
+          // Aguarda o carregamento dos detalhes
           await page.waitForSelector("h1.DUwDvf", { timeout: 5000 });
+          await sleep(1000);
 
-          // Captura os detalhes com verificações mais robustas
+          // Captura os detalhes
           const details = await page.evaluate(() => {
             const getTextContent = (selector) => {
               const element = document.querySelector(selector);
@@ -140,22 +160,16 @@ app.get("/search", async (req, res) => {
             return { name, address, phone, website };
           });
 
-          logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
-          results.push(details);
-          processedItems.add(cardId);
-
-          // Volta para a lista com retry mechanism
-          let backSuccess = false;
-          for (let retry = 0; retry < MAX_RETRIES && !backSuccess; retry++) {
-            try {
-              await page.goBack({ waitUntil: "networkidle0" });
-              await page.waitForSelector(".Nv2PK", { timeout: 5000 });
-              backSuccess = true;
-            } catch (error) {
-              if (retry === MAX_RETRIES - 1) throw error;
-              await sleep(1000);
-            }
+          if (details.name !== "Nome não encontrado") {
+            logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
+            results.push(details);
+            processedItems.add(details.name);
           }
+
+          // Volta para a lista
+          await page.goBack({ waitUntil: "networkidle0" });
+          await page.waitForSelector(".Nv2PK", { timeout: 5000 });
+          await sleep(1000);
 
         } catch (error) {
           logWithTime(`Erro ao processar card ${i + 1}: ${error.message}`);
@@ -164,14 +178,12 @@ app.get("/search", async (req, res) => {
             if (!isOnList) {
               await page.goBack({ waitUntil: "networkidle0" });
               await page.waitForSelector(".Nv2PK", { timeout: 5000 });
+              await sleep(1000);
             }
           } catch (navError) {
             logWithTime(`Erro ao navegar de volta: ${navError.message}`);
           }
         }
-
-        // Rate limiting between cards
-        await sleep(RATE_LIMIT_DELAY);
       }
     }
 
@@ -189,7 +201,8 @@ app.get("/search", async (req, res) => {
         return { success: false };
       });
       
-      await sleep(2000);
+      // Aguarda mais tempo para o carregamento no modo headless
+      await sleep(3000);
       return scrollResult;
     }
 
