@@ -3,16 +3,6 @@ const puppeteer = require("puppeteer");
 
 const app = express();
 
-// Função para timestamp
-function getTimestamp() {
-  return new Date().toLocaleTimeString("pt-BR");
-}
-
-// Log com timestamp
-function logWithTime(message) {
-  console.log(`[${getTimestamp()}] ${message}`);
-}
-
 // Rota raiz
 app.get("/", (req, res) => {
   res.send("Bem vindo ao Scraper Google Maps");
@@ -27,63 +17,72 @@ app.get("/search", async (req, res) => {
   }
 
   try {
-    logWithTime(`Iniciando busca por: ${searchTerm}`);
-
     const browser = await puppeteer.launch({
-      headless: "new",
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--lang=pt-BR", "--start-maximized"],
+      headless: true,
+      executablePath: "/usr/bin/google-chrome", // Caminho para o Chrome instalado
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--lang=pt-BR", // Define o idioma do navegador como português
+      ],
     });
 
     const page = await browser.newPage();
-    await page.setViewport({ width: 1920, height: 1080 });
-    await page.goto(`https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`, {
-      waitUntil: "networkidle2",
+
+    // Configura o cabeçalho de idioma
+    await page.setExtraHTTPHeaders({
+      "Accept-Language": "pt-BR,pt;q=0.9",
     });
 
-    await page.waitForSelector('div[role="feed"]');
-    const scrollableDiv = await page.$('div[role="feed"]');
-    let previousResultsCount = 0;
-    let maxAttempts = 10;
-    let attempts = 0;
+    // Gera a URL de pesquisa do Google Maps
+    const url = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
+    await page.goto(url, { waitUntil: "networkidle2" });
 
-    while (attempts < maxAttempts) {
-      await page.evaluate((div) => div.scrollTo(0, div.scrollHeight), scrollableDiv);
-      await new Promise((resolve) => setTimeout(resolve, 3000)); // Substituição do waitForTimeout
+    console.log(`Pesquisando: ${searchTerm}`);
 
-      const currentResultsCount = await page.evaluate(
-        () => document.querySelectorAll("div.Nv2PK").length
-      );
+    // Seletor para os resultados
+    const resultsSelector = `[aria-label="Resultados para ${searchTerm}"]`;
+    await page.waitForSelector(resultsSelector, { timeout: 60000 }); // Aumenta o tempo limite para o carregamento
 
-      console.log(`Resultados encontrados após rolagem ${attempts + 1}: ${currentResultsCount}`);
-
-      if (currentResultsCount === previousResultsCount) break;
-      previousResultsCount = currentResultsCount;
-      attempts++;
+    // Rolar a página até carregar todos os resultados
+    let previousHeight;
+    while (true) {
+      const resultDiv = await page.$(resultsSelector);
+      previousHeight = await page.evaluate((el) => el.scrollHeight, resultDiv);
+      await page.evaluate((el) => el.scrollBy(0, el.scrollHeight), resultDiv);
+      await new Promise((resolve) => setTimeout(resolve, 6000)); // Aguarda 6 segundos entre as rolagens
+      const newHeight = await page.evaluate((el) => el.scrollHeight, resultDiv);
+      if (newHeight === previousHeight) break; // Sai do loop se não houver mais resultados
     }
 
-    console.log(`Total final de resultados encontrados: ${previousResultsCount}`);
-
+    // Extrair informações dos resultados
     const results = await page.evaluate(() => {
       const listings = document.querySelectorAll("div.Nv2PK");
       return Array.from(listings).map((listing) => {
+        // Nome do local
         const name = listing.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não disponível";
-        const rating =
-          listing.querySelector(".MW4etd")?.textContent.trim() || "Avaliação não disponível";
-        const reviews =
-          listing.querySelector(".UY7F9")?.textContent.trim() || "Sem avaliações";
 
+        // Avaliação
+        const rating = listing.querySelector(".MW4etd")?.textContent.trim() || "Sem avaliação";
+
+        // Número de avaliações
+        const reviews = listing.querySelector(".UY7F9")?.textContent.trim() || "Sem avaliações";
+
+        // Endereço
         const address = listing
           .querySelector('button[data-item-id="address"]')
           ?.getAttribute("aria-label")
           ?.replace(/^Endereço:\s*/, "")
           ?.trim() || "Endereço não disponível";
 
+        // Telefone
         const phone = listing
           .querySelector('button[data-item-id="phone"]')
           ?.getAttribute("aria-label")
           ?.replace(/^Telefone:\s*/, "")
           ?.trim() || "Telefone não disponível";
 
+        // Website
         const website = listing
           .querySelector('a[href^="http"][aria-label^="Visitar site"]')
           ?.href || "Site não disponível";
@@ -92,21 +91,20 @@ app.get("/search", async (req, res) => {
       });
     });
 
-    logWithTime("Busca finalizada.");
     await browser.close();
 
-    res.json({ term: searchTerm, total: results.length, results });
+    // Retorna os resultados como JSON
+    return res.json({
+      term: searchTerm,
+      total: results.length,
+      results,
+    });
   } catch (error) {
     console.error("Erro ao realizar a pesquisa:", error);
-    res.status(500).json({ error: "Erro ao realizar a pesquisa.", message: error.message });
+    return res.status(500).json({ error: "Erro ao realizar a pesquisa." });
   }
 });
 
-// Inicializa o servidor
+// Inicializar o servidor
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("----------------------------------------");
-  logWithTime(`Servidor iniciado na porta ${PORT}`);
-  logWithTime("Sistema pronto para buscas!");
-  console.log("----------------------------------------");
-});
+app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
