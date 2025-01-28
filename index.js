@@ -119,52 +119,60 @@ app.get("/search", async (req, res) => {
         // Nome do estabelecimento
         const name = el.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não encontrado";
         
-        // Endereço - procura especificamente pelo endereço
+        // Procura por todos os textos informativos
+        const allTexts = Array.from(el.querySelectorAll('.W4Efsd')).map(el => el.textContent.trim());
+        
+        // Endereço - procura por padrões de endereço
         let address = "Endereço não encontrado";
-        const addressElements = Array.from(el.querySelectorAll('.W4Efsd'));
-        for (const element of addressElements) {
-          const text = element.textContent.trim();
-          // Procura por padrões típicos de endereço (rua, avenida, etc)
-          if (text.match(/^(R\.|Rua|Av\.|Avenida|Al\.|Alameda|Rod\.|Rodovia|Travessa|Praça)/i)) {
-            address = text;
+        const addressPattern = /(R\.|Rua|Av\.|Avenida|Al\.|Alameda|Rod\.|Rodovia|Travessa|Praça)[\s\S]+?(,\s*[\w\s-]+\s*-\s*RS|,\s*Porto\s+Alegre)/i;
+        for (const text of allTexts) {
+          const match = text.match(addressPattern);
+          if (match) {
+            address = match[0].trim();
             break;
           }
         }
         
-        // Telefone - procura especificamente por padrões de telefone
+        // Telefone - procura por padrões de telefone e limpa o texto
         let phone = "Telefone não encontrado";
-        const phoneElements = Array.from(el.querySelectorAll('button[data-tooltip], .W4Efsd'));
-        for (const element of phoneElements) {
-          const text = element.textContent.trim();
-          // Procura por padrões de telefone ((51), +55, etc)
-          if (text.match(/(\+55|^\(\d{2}\)|\d{2})\s?\d{4,5}-?\d{4}/)) {
-            phone = text.match(/(\+55|^\(\d{2}\)|\d{2})\s?\d{4,5}-?\d{4}/)[0];
+        const phonePattern = /(?:\+55\s?)?(?:\(?\d{2}\)?[\s-]?)?\d{4,5}[-\s]?\d{4}/;
+        for (const text of allTexts) {
+          const match = text.match(phonePattern);
+          if (match) {
+            phone = match[0].trim().replace(/^\+55\s*/, '');
             break;
           }
         }
         
-        // Site
+        // Site - procura por links que não sejam do Google Maps
         let website = "Site não encontrado";
-        const websiteElement = el.querySelector('a[data-tooltip*="site"]') || 
-                             el.querySelector('a[data-item-id*="authority"]') ||
-                             el.querySelector('a[href*="http"]');
-        if (websiteElement && websiteElement.href) {
-          website = websiteElement.href;
+        const allLinks = el.querySelectorAll('a[href]');
+        for (const link of allLinks) {
+          const href = link.href;
+          if (href && 
+              !href.includes('google.com/maps') && 
+              !href.includes('google.com/search') &&
+              (href.startsWith('http://') || href.startsWith('https://'))) {
+            website = href;
+            break;
+          }
         }
         
         // Avaliação
         const rating = el.querySelector(".MW4etd")?.textContent.trim() || "Sem avaliação";
         
-        // Número de avaliações
+        // Número de avaliações - limpa os parênteses
         const reviews = el.querySelector(".UY7F9")?.textContent.replace(/[()]/g, "").trim() || "0";
 
-        // Horário de funcionamento
+        // Horário de funcionamento - extrai apenas a parte do horário
         let hours = "Horário não disponível";
-        const hoursElements = Array.from(el.querySelectorAll('.W4Efsd, [data-tooltip]'));
-        for (const element of hoursElements) {
-          const text = element.textContent.trim();
-          if (text.match(/(Aberto|Fechado|Fecha|Abre)\s/i)) {
-            hours = text;
+        const hoursPattern = /(Aberto|Fechado|Fecha)[\s•]*(?:⋅\s*)?(24 horas|até\s+\d{1,2}:\d{2}|às\s+\d{1,2}:\d{2}|das\s+\d{1,2}:\d{2}\s+às\s+\d{1,2}:\d{2})/i;
+        for (const text of allTexts) {
+          const match = text.match(hoursPattern);
+          if (match) {
+            hours = match[0].trim()
+              .replace(/\s+•\s+/g, ' ')
+              .replace(/\s+⋅\s+/g, ' ');
             break;
           }
         }
