@@ -57,16 +57,6 @@ app.get("/search", async (req, res) => {
     // Aguarda o carregamento dos resultados
     await page.waitForSelector(".Nv2PK", { timeout: 30000 });
 
-    // Função para esperar um elemento específico
-    const waitForElement = async (selector, timeout = 2000) => {
-      try {
-        await page.waitForSelector(selector, { timeout });
-        return true;
-      } catch (e) {
-        return false;
-      }
-    };
-
     // Função para contar resultados atuais
     const countResults = async () => {
       return await page.evaluate(() => {
@@ -123,62 +113,47 @@ app.get("/search", async (req, res) => {
 
     logWithTime(`Iniciando extração de dados de ${previousResultCount} resultados...`);
     // Extrair os dados dos resultados
-    const results = await page.evaluate(async () => {
+    const results = await page.evaluate(() => {
       const elements = document.querySelectorAll(".Nv2PK");
-      const results = [];
-
-      for (const el of elements) {
-        // Nome do estabelecimento (mesmo seletor do Python)
+      return Array.from(elements).map((el) => {
+        // Nome do estabelecimento (mesmo seletor do Selenium)
         const name = el.querySelector(".qBF1Pd")?.textContent.trim() || "Nome não encontrado";
         
-        // Clica no elemento para abrir os detalhes
-        el.click();
-        
-        // Aguarda um pouco para os detalhes carregarem
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        // Endereço (usando o seletor do Python)
+        // Endereço (usando seletor do Selenium)
         let address = "Endereço não encontrado";
-        const addressElement = document.querySelector('button[data-item-id*="address"]');
+        const addressElement = el.querySelector('button[data-item-id*="address"]');
         if (addressElement) {
           address = addressElement.textContent.trim();
         }
         
-        // Telefone (usando o seletor do Python)
+        // Telefone (usando seletor do Selenium)
         let phone = "Telefone não encontrado";
-        const phoneElement = document.querySelector('button[data-item-id*="phone"]');
+        const phoneElement = el.querySelector('button[data-item-id*="phone"]');
         if (phoneElement) {
           phone = phoneElement.textContent.trim();
         }
         
-        // Website (usando o seletor do Python)
+        // Website (usando seletor do Selenium)
         let website = "Site não encontrado";
-        const websiteElement = document.querySelector('a[aria-label*="Visitar site"], a[aria-label*="Visit site"]');
-        if (websiteElement) {
+        const websiteElement = el.querySelector('a[aria-label*="Visitar site"], a[aria-label*="Visit site"]');
+        if (websiteElement && websiteElement.href) {
           website = websiteElement.href;
         }
         
-        // Avaliação (mesmo seletor do Python)
+        // Rating (mesmo seletor do Selenium)
         const rating = el.querySelector(".MW4etd")?.textContent.trim() || "Sem avaliação";
         
-        // Número de avaliações (mesmo seletor do Python)
+        // Reviews (mesmo seletor do Selenium)
         const reviews = el.querySelector(".UY7F9")?.textContent.replace(/[()]/g, "").trim() || "0";
 
-        // Horário de funcionamento
+        // Horário
         let hours = "Horário não disponível";
-        const hoursElement = document.querySelector('button[data-item-id*="oh"]');
+        const hoursElement = el.querySelector('button[data-item-id*="oh"]');
         if (hoursElement) {
           hours = hoursElement.textContent.trim();
         }
 
-        // Volta para a lista
-        const backButton = document.querySelector('button[jsaction="pane.place.backToList"]');
-        if (backButton) {
-          backButton.click();
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
-
-        results.push({
+        return {
           name,
           address,
           phone,
@@ -186,10 +161,8 @@ app.get("/search", async (req, res) => {
           rating,
           reviews,
           hours
-        });
-      }
-
-      return results;
+        };
+      });
     });
 
     await browser.close();
