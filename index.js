@@ -37,7 +37,7 @@ app.get("/search", async (req, res) => {
     logWithTime("Iniciando navegador...");
 
     browser = await puppeteer.launch({
-      headless: false,
+      headless: "new",
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -45,7 +45,14 @@ app.get("/search", async (req, res) => {
         "--disable-accelerated-2d-canvas",
         "--disable-gpu",
         "--window-size=1920x1080",
+        "--disable-web-security",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--no-zygote",
+        "--single-process",
+        "--no-first-run"
       ],
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
+      ignoreHTTPSErrors: true
     });
 
     const page = await browser.newPage();
