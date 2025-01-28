@@ -1,289 +1,259 @@
 const express = require("express");
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-extra");
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+puppeteer.use(StealthPlugin());
 
 const app = express();
+const RATE_LIMIT_DELAY = 2000; // Delay between card processing
+const MAX_RETRIES = 3; // Maximum number of retries for failed operations
 
-// Função para formatar timestamp
 function getTimestamp() {
-  return new Date().toLocaleTimeString('pt-BR');
+  return new Date().toLocaleTimeString("pt-BR");
 }
 
-// Função para log com timestamp
 function logWithTime(message) {
   console.log(`[${getTimestamp()}] ${message}`);
 }
 
-// Rota raiz
+// Sleep utility function
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 app.get("/", (req, res) => {
-  res.send("Bem vindo ao Scraper Google Maps");
+  res.send("Bem-vindo ao Scraper Google Maps");
 });
 
-// Rota de busca no Google Maps
 app.get("/search", async (req, res) => {
   const searchTerm = req.query.term;
+  const maxResults = parseInt(req.query.max) || 100; // Limit number of results
 
   if (!searchTerm) {
     return res.status(400).json({ error: "O parâmetro 'term' é obrigatório." });
   }
 
+  let browser;
+
   try {
     logWithTime(`Iniciando nova busca por: ${searchTerm}`);
     logWithTime("Iniciando navegador...");
-    
-    const browser = await puppeteer.launch({
-      headless: true,
+
+    browser = await puppeteer.launch({
+      headless: false,
       args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--disable-gpu',
-        '--window-size=1920x1080'
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-accelerated-2d-canvas",
+        "--disable-gpu",
+        "--window-size=1920x1080",
       ],
     });
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1920, height: 1080 });
-
-    // Configura o cabeçalho de idioma
+    
+    // Set user agent and language
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
     await page.setExtraHTTPHeaders({
-      "Accept-Language": "pt-BR,pt;q=0.9",
+      'Accept-Language': 'pt-BR,pt;q=0.9',
     });
 
-    console.log(`Pesquisando: ${searchTerm}`);
-
-    // Gera a URL de pesquisa do Google Maps
     const url = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
     await page.goto(url, { waitUntil: "networkidle0" });
-
-    // Aguarda o carregamento dos resultados
-    await page.waitForSelector(".Nv2PK", { timeout: 30000 });
-
-    // Função para contar resultados atuais
-    const countResults = async () => {
-      return await page.evaluate(() => {
-        return document.querySelectorAll(".Nv2PK").length;
-      });
-    };
-
-    // Função para rolar a página
-    async function scrollPage() {
-      await page.evaluate(() => {
-        const container = document.querySelector('div[role="feed"]');
-        if (container) {
-          const scrollHeight = container.scrollHeight;
-          container.scrollTo(0, scrollHeight);
-        }
-      });
-      await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Wait for results with retry mechanism
+    let retries = 0;
+    while (retries < MAX_RETRIES) {
+      try {
+        await page.waitForSelector(".Nv2PK", { timeout: 30000 });
+        break;
+      } catch (error) {
+        retries++;
+        if (retries === MAX_RETRIES) throw error;
+        logWithTime(`Tentativa ${retries} de ${MAX_RETRIES} para carregar resultados...`);
+        await sleep(2000);
+      }
     }
 
-    // Sistema de rolagem melhorado
-    let previousResultCount = 0;
-    let sameCountTimes = 0;
-    let maxScrolls = 50; // Aumentamos o limite de rolagens
-    let currentScroll = 0;
+    const results = [];
+    let processedItems = new Set();
 
-    console.log("Iniciando captura de resultados...");
+    async function processVisibleCards() {
+      const cards = await page.$$(".Nv2PK");
+      logWithTime(`Encontrados ${cards.length} cards visíveis`);
 
-    while (currentScroll < maxScrolls) {
-      currentScroll++;
-      await scrollPage();
+      for (let i = 0; i < cards.length && results.length < maxResults; i++) {
+        try {
+          // Verifica se já processamos este card
+          const cardId = await page.evaluate(el => el.dataset.cardId || el.textContent, cards[i]);
+          if (processedItems.has(cardId)) {
+            continue;
+          }
+
+          // Rola até o card com smooth scrolling
+          await page.evaluate((card) => {
+            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, cards[i]);
+          
+          await sleep(RATE_LIMIT_DELAY);
+
+          // Tenta clicar no card com retry mechanism
+          let clickSuccess = false;
+          for (let retry = 0; retry < MAX_RETRIES && !clickSuccess; retry++) {
+            try {
+              await cards[i].click();
+              clickSuccess = true;
+            } catch (error) {
+              if (retry === MAX_RETRIES - 1) throw error;
+              await sleep(1000);
+            }
+          }
+
+          await page.waitForSelector("h1.DUwDvf", { timeout: 5000 });
+
+          // Captura os detalhes com verificações mais robustas
+          const details = await page.evaluate(() => {
+            const getTextContent = (selector) => {
+              const element = document.querySelector(selector);
+              return element ? element.textContent.trim() : null;
+            };
+
+            const name = getTextContent("h1.DUwDvf") || "Nome não encontrado";
+            const address = document.querySelector('button[data-item-id*="address"]')?.textContent?.trim() || 
+                           document.querySelector('div[data-item-id*="address"]')?.textContent?.trim() ||
+                           "Endereço não encontrado";
+            
+            const phone = document.querySelector('button[data-item-id^="phone"]')?.getAttribute("aria-label")?.replace("Telefone: ", "")?.trim() || 
+                         document.querySelector('div[data-item-id^="phone"]')?.textContent?.trim() ||
+                         "Telefone não encontrado";
+            
+            const website = document.querySelector('a[data-item-id*="authority"]')?.href || 
+                           document.querySelector('a[data-item-id*="website"]')?.href ||
+                           "Site não encontrado";
+
+            return { name, address, phone, website };
+          });
+
+          logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
+          results.push(details);
+          processedItems.add(cardId);
+
+          // Volta para a lista com retry mechanism
+          let backSuccess = false;
+          for (let retry = 0; retry < MAX_RETRIES && !backSuccess; retry++) {
+            try {
+              await page.goBack({ waitUntil: "networkidle0" });
+              await page.waitForSelector(".Nv2PK", { timeout: 5000 });
+              backSuccess = true;
+            } catch (error) {
+              if (retry === MAX_RETRIES - 1) throw error;
+              await sleep(1000);
+            }
+          }
+
+        } catch (error) {
+          logWithTime(`Erro ao processar card ${i + 1}: ${error.message}`);
+          try {
+            const isOnList = await page.$(".Nv2PK");
+            if (!isOnList) {
+              await page.goBack({ waitUntil: "networkidle0" });
+              await page.waitForSelector(".Nv2PK", { timeout: 5000 });
+            }
+          } catch (navError) {
+            logWithTime(`Erro ao navegar de volta: ${navError.message}`);
+          }
+        }
+
+        // Rate limiting between cards
+        await sleep(RATE_LIMIT_DELAY);
+      }
+    }
+
+    async function scrollPage() {
+      const scrollResult = await page.evaluate(() => {
+        const container = document.querySelector('div[role="feed"]');
+        if (container) {
+          const previousHeight = container.scrollHeight;
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: 'smooth'
+          });
+          return { previousHeight, success: true };
+        }
+        return { success: false };
+      });
       
-      const currentResultCount = await countResults();
-      console.log(`Rolagem ${currentScroll}/${maxScrolls} - Resultados encontrados: ${currentResultCount}`);
+      await sleep(2000);
+      return scrollResult;
+    }
 
-      // Se o número de resultados não aumentou
-      if (currentResultCount === previousResultCount) {
-        sameCountTimes++;
-        // Se ficou 3 vezes sem aumentar, provavelmente chegamos ao fim
-        if (sameCountTimes >= 3) {
-          console.log("Número de resultados estabilizou, parando a busca...");
+    // Loop principal: rola e processa
+    let previousHeight = 0;
+    let sameHeightCount = 0;
+    const maxAttempts = 15;
+    let lastProcessedCount = 0;
+    let noNewResultsCount = 0;
+
+    for (let attempt = 0; attempt < maxAttempts && results.length < maxResults; attempt++) {
+      const beforeCount = results.length;
+      await processVisibleCards();
+      const afterCount = results.length;
+      
+      // Se não encontrou novos resultados
+      if (afterCount === beforeCount) {
+        noNewResultsCount++;
+        if (noNewResultsCount >= 2) {
+          logWithTime("Nenhum novo resultado encontrado após múltiplas tentativas, finalizando...");
           break;
         }
       } else {
-        sameCountTimes = 0; // Reseta o contador se encontrou novos resultados
+        noNewResultsCount = 0;
       }
 
-      previousResultCount = currentResultCount;
-      
-      // Pequena pausa extra a cada 10 rolagens para garantir carregamento
-      if (currentScroll % 10 === 0) {
-        await new Promise(resolve => setTimeout(resolve, 3000));
+      const scrollResult = await scrollPage();
+      if (!scrollResult.success) {
+        logWithTime("Não foi possível encontrar o container de rolagem");
+        break;
       }
+
+      const currentHeight = await page.evaluate(() => {
+        const container = document.querySelector('div[role="feed"]');
+        return container ? container.scrollHeight : document.documentElement.scrollHeight;
+      });
+
+      if (currentHeight === previousHeight) {
+        sameHeightCount++;
+        if (sameHeightCount >= 2) {
+          logWithTime("Altura estabilizou, finalizando...");
+          break;
+        }
+      } else {
+        sameHeightCount = 0;
+      }
+
+      previousHeight = currentHeight;
+      lastProcessedCount = afterCount;
     }
 
-    logWithTime(`Iniciando extração de dados de ${previousResultCount} resultados...`);
-    
-    // Extrair os dados dos resultados
-    const results = [];
-    const elements = await page.$$('.Nv2PK');
-    
-    // Processa todos os elementos em lotes
-    const batchSize = 5; // Processa 5 elementos por vez
-    
-    for (let i = 0; i < elements.length; i += batchSize) {
-      const batch = elements.slice(i, i + batchSize);
-      logWithTime(`Processando lote ${Math.floor(i/batchSize) + 1}/${Math.ceil(elements.length/batchSize)}`);
-      
-      // Processa o lote em paralelo
-      const batchResults = await Promise.all(
-        batch.map(async (el) => {
-          try {
-            // Nome
-            const name = await el.$eval("h3.fontHeadlineSmall, .qBF1Pd", e => e ? e.textContent.trim() : "Nome não encontrado");
-            
-            // Endereço
-            const address = await el.$eval('button[data-item-id*="address"], div[class*="fontBodyMedium"]', e => {
-              const fullText = e.textContent.trim();
-              const parts = fullText.split(/(?:Fechado|Aberto|⋅)/);
-              if (parts.length > 0) {
-                return parts[0].replace(/^.*?(?=R\.|Av\.|Rua|Alameda|Travessa|Praça)/i, '')
-                  .replace(/Barbearia/g, '')
-                  .replace(/\d+,\d+\(\d+\)/g, '')
-                  .replace(/·/g, '')
-                  .replace(/\s+/g, ' ')
-                  .trim();
-              }
-              return "Endereço não encontrado";
-            });
-
-            // Telefone - Nova implementação
-            let phone = "Telefone não encontrado";
-            try {
-              // Clica no item para abrir detalhes
-              await el.click();
-              await page.waitForSelector('div[role="dialog"]', { timeout: 2000 });
-
-              // Espera um momento para o conteúdo carregar
-              await new Promise(resolve => setTimeout(resolve, 500));
-
-              // Primeiro tenta pegar o número do atributo data-item-id que contém o número real
-              const phoneElement = await page.$('[data-item-id*="phone:tel:"]');
-              if (phoneElement) {
-                const itemId = await phoneElement.evaluate(el => el.getAttribute('data-item-id'));
-                if (itemId) {
-                  phone = itemId.split('phone:tel:')[1];
-                }
-              }
-
-              // Se não encontrou, tenta clicar no botão de copiar e pegar do clipboard
-              if (!phone || phone === "Telefone não encontrado") {
-                const copyButton = await page.$('button[data-tooltip*="Copiar número"]');
-                if (copyButton) {
-                  await copyButton.click();
-                  await new Promise(resolve => setTimeout(resolve, 200));
-                  
-                  // Tenta pegar o número que foi copiado para o clipboard
-                  const ariaLabel = await copyButton.evaluate(el => el.getAttribute('aria-label'));
-                  if (ariaLabel) {
-                    phone = ariaLabel.replace(/Telefone:?\s*/i, '').trim();
-                  }
-                }
-              }
-
-              // Se ainda não encontrou, tenta outros métodos
-              if (!phone || phone === "Telefone não encontrado" || phone === "Copiar número de telefone") {
-                const alternativeElement = await page.$('button[aria-label*="Telefone"], .rogA2c');
-                if (alternativeElement) {
-                  const text = await alternativeElement.evaluate(el => {
-                    const ariaLabel = el.getAttribute('aria-label');
-                    if (ariaLabel && ariaLabel.includes('Telefone')) {
-                      return ariaLabel.replace(/Telefone:?\s*/i, '').trim();
-                    }
-                    return el.textContent.trim();
-                  });
-                  if (text && text !== "Copiar número de telefone") {
-                    phone = text;
-                  }
-                }
-              }
-
-              // Fecha o painel
-              await page.keyboard.press('Escape');
-
-              // Formata o número se encontrou
-              if (phone && phone !== "Telefone não encontrado" && phone !== "Copiar número de telefone") {
-                const numbers = phone.replace(/[^\d+]/g, '');
-                if (numbers.length >= 8) {
-                  // Remove o 0 depois do 55 se existir
-                  const cleanNumber = numbers.replace(/^(?:55|)\s*0+/, '55');
-                  
-                  phone = cleanNumber
-                    .replace(/^(?!55|\+55)/, '55')  // Adiciona 55 se não existir
-                    .replace(/^(?!\+)/, '+')       // Adiciona + se não existir
-                    .replace(/^(\+55)(\d{2})(\d{4,5})(\d{4})$/, '$1 $2 $3-$4'); // Formata
-                } else {
-                  phone = "Telefone não encontrado";
-                }
-              } else {
-                phone = "Telefone não encontrado";
-              }
-            } catch (error) {
-              console.error('Erro ao pegar telefone:', error);
-              phone = "Telefone não encontrado";
-            }
-
-            // Website
-            const website = await el.$eval('a[data-item-id*="authority"], a[data-item-id*="website"], button[data-item-id*="authority"], a[href*="http"]:not([href*="google"])', e => {
-              const href = e.getAttribute('href') || e.getAttribute('data-url') || e.getAttribute('data-item-id');
-              if (href && !href.includes('google.com') && !href.includes('maps.google') && !href.includes('search?')) {
-                return href.split('?')[0].trim();
-              }
-              return "Site não encontrado";
-            }).catch(() => "Site não encontrado");
-
-            return {
-              name: name.replace(/\s+/g, ' ').trim(),
-              address: address.replace(/\s+/g, ' ').trim(),
-              phone,
-              website
-            };
-          } catch (error) {
-            console.error('Erro ao processar resultado:', error);
-            return null;
-          }
-        })
-      );
-      
-      // Adiciona os resultados válidos do lote
-      results.push(...batchResults.filter(r => r !== null));
-      
-      // Pequena pausa entre os lotes
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-
+    logWithTime(`Busca finalizada. Total de resultados: ${results.length}`);
     await browser.close();
     logWithTime("Navegador fechado com sucesso");
 
-    // Retorna os resultados como JSON
-    logWithTime(`Busca finalizada! ${results.length} resultados encontrados`);
-    logWithTime("Sistema pronto para nova busca!");
-    console.log("----------------------------------------");
-    
     return res.json({
-      term: searchTerm,
       total: results.length,
-      results,
+      results: results
     });
+
   } catch (error) {
-    console.error("Erro ao realizar a pesquisa:", error);
-    logWithTime("Ocorreu um erro durante a busca!");
-    logWithTime("Sistema pronto para nova busca!");
-    console.log("----------------------------------------");
-    
-    return res.status(500).json({ 
-      error: "Erro ao realizar a pesquisa.",
-      message: error.message 
-    });
+    logWithTime(`Erro durante a execução: ${error.message}`);
+    if (browser) {
+      await browser.close();
+      logWithTime("Navegador fechado após erro");
+    }
+    return res.status(500).json({ error: error.message });
   }
 });
 
-// Inicializar o servidor
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("----------------------------------------");
-  logWithTime(`Servidor iniciado na porta ${PORT}`);
-  logWithTime("Sistema pronto para buscas!");
-  console.log("----------------------------------------");
+  console.log(`Servidor rodando na porta ${PORT}`);
 });
