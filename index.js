@@ -44,50 +44,25 @@ app.get("/search", async (req, res) => {
     const resultSelector = ".Nv2PK.THOPZb.cqNgl.Hk4XGb"; // Seleciona cada bloco de resultados
     await page.waitForSelector(resultSelector, { timeout: 60000 }); // Aguarda o carregamento inicial
 
-    // Variável para armazenar todos os resultados
-    let allResults = [];
+    // Extrair informações dos resultados
+    const results = await page.evaluate(() => {
+      const elements = document.querySelectorAll(".Nv2PK.THOPZb.cqNgl.Hk4XGb");
+      return Array.from(elements).map((el) => {
+        const name = el.querySelector(".qBF1Pd.fontHeadlineSmall")?.textContent || "Nome não encontrado";
+        const address = el.querySelector(".W4Efsd")?.textContent || "Endereço não encontrado";
+        const phone = el.querySelector("[data-tooltip='Copiar número de telefone']")?.textContent || "Telefone não encontrado";
+        const website = el.querySelector("[data-value='Website']")?.href || "Site não encontrado";
 
-    // Rolar a página até carregar todos os resultados
-    let previousHeight;
-    while (true) {
-      const results = await page.evaluate(() => {
-        const elements = document.querySelectorAll(".Nv2PK.THOPZb.cqNgl.Hk4XGb");
-        return Array.from(elements).map((el) => {
-          const name = el.querySelector(".qBF1Pd.fontHeadlineSmall")?.textContent || "Nome não encontrado";
-          const address = el.querySelector(".W4Efsd")?.textContent || "Endereço não encontrado";
-          const phone = el.querySelector("[data-tooltip='Copiar número de telefone']")?.textContent || "Telefone não encontrado";
-          const website = el.querySelector("[data-value='Website']")?.href || "Site não encontrado";
-          const category = el.querySelector(".Z2fNBe")?.textContent || "Categoria não encontrada";
-          const rating = el.querySelector(".MW4etd")?.ariaLabel || "Avaliação não encontrada";
-
-          return { 
-            name, 
-            address, 
-            phone, 
-            website, 
-            category,
-            rating,
-          };
-        });
+        return { name, address, phone, website };
       });
-
-      allResults = [...allResults, ...results];
-
-      // Rola a página para baixo
-      previousHeight = await page.evaluate(() => document.body.scrollHeight);
-      await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-      await new Promise((resolve) => setTimeout(resolve, 2000)); // Espera 2 segundos
-      const newHeight = await page.evaluate(() => document.body.scrollHeight);
-
-      if (newHeight === previousHeight) break; // Para se não houver mais resultados para carregar
-    }
+    });
 
     await browser.close();
 
     // Retorna os resultados como JSON
     return res.json({
       term: searchTerm,
-      results: allResults,
+      results,
     });
   } catch (error) {
     console.error("Erro ao realizar a pesquisa:", error);
