@@ -4,8 +4,17 @@ const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 puppeteer.use(StealthPlugin());
 
 const app = express();
-const RATE_LIMIT_DELAY = 2000; // Delay between card processing
-const MAX_RETRIES = 3; // Maximum number of retries for failed operations
+
+// Configurações de timeout
+app.use((req, res, next) => {
+  res.setTimeout(300000); // 5 minutos
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Keep-Alive', 'timeout=300');
+  next();
+});
+
+const RATE_LIMIT_DELAY = 2000;
+const MAX_RETRIES = 3;
 
 function getTimestamp() {
   return new Date().toLocaleTimeString("pt-BR");
@@ -15,7 +24,6 @@ function logWithTime(message) {
   console.log(`[${getTimestamp()}] ${message}`);
 }
 
-// Sleep utility function
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 app.get("/", (req, res) => {
@@ -24,7 +32,7 @@ app.get("/", (req, res) => {
 
 app.get("/search", async (req, res) => {
   const searchTerm = req.query.term;
-  const maxResults = parseInt(req.query.max) || 100; // Limit number of results
+  const maxResults = parseInt(req.query.max) || 100;
 
   if (!searchTerm) {
     return res.status(400).json({ error: "O parâmetro 'term' é obrigatório." });
@@ -84,156 +92,78 @@ app.get("/search", async (req, res) => {
     const results = [];
     let processedItems = new Set();
 
-    async function waitForSelector(selector, timeout = 5000) {
-      try {
-        await page.waitForSelector(selector, { timeout });
-        return true;
-      } catch (error) {
-        return false;
-      }
-    }
-
     async function processVisibleCards() {
-      // Aguarda um pouco para o DOM estabilizar
-      await sleep(2000);
-
-      // Usa evaluateHandle para manter a referência aos elementos
-      const cardsHandle = await page.evaluateHandle(() => {
-        return document.querySelectorAll('.Nv2PK');
-      });
-      
-      const cards = await page.evaluate(cardsHandle => {
-        return Array.from(cardsHandle).map(card => {
-          const name = card.querySelector('div.qBF1Pd')?.textContent?.trim();
-          return { element: card, name };
-        });
-      }, cardsHandle);
-
+      const cards = await page.$$(".Nv2PK");
       logWithTime(`Encontrados ${cards.length} cards visíveis`);
 
       for (let i = 0; i < cards.length && results.length < maxResults; i++) {
         try {
-          // Verifica se já processamos este card pelo nome
-          if (processedItems.has(cards[i].name)) {
+          // Verifica se já processamos este card
+          const cardId = await page.evaluate(el => el.dataset.cardId || el.textContent, cards[i]);
+          if (processedItems.has(cardId)) {
             continue;
           }
 
-          // Scroll suave até o elemento
-          await page.evaluate((index) => {
-            const cards = document.querySelectorAll('.Nv2PK');
-            if (cards[index]) {
-              cards[index].scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-          }, i);
+          // Rola até o card com smooth scrolling
+          await page.evaluate((card) => {
+            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, cards[i]);
+          
+          await sleep(RATE_LIMIT_DELAY);
 
-          await sleep(2000);
-
-          // Tenta clicar no card usando evaluate
-          const clicked = await page.evaluate((index) => {
-            const cards = document.querySelectorAll('.Nv2PK');
-            const card = cards[index];
-            if (card) {
-              // Tenta clicar em diferentes elementos dentro do card
-              const clickableElements = [
-                card.querySelector('a.hfpxzc'),
-                card.querySelector('div.qBF1Pd'),
-                card
-              ];
-
-              for (const element of clickableElements) {
-                if (element) {
-                  element.click();
-                  return true;
-                }
-              }
-            }
-            return false;
-          }, i);
-
-          if (!clicked) {
-            throw new Error('Card não encontrado para clique');
-          }
-
-          // Aguarda o carregamento dos detalhes com diferentes seletores
-          let detailsLoaded = false;
-          for (const selector of ['h1.DUwDvf', 'div.TIHn2', 'div.rogA2c']) {
-            if (await waitForSelector(selector)) {
-              detailsLoaded = true;
-              break;
+          // Tenta clicar no card com retry mechanism
+          let clickSuccess = false;
+          for (let retry = 0; retry < MAX_RETRIES && !clickSuccess; retry++) {
+            try {
+              await cards[i].click();
+              clickSuccess = true;
+            } catch (error) {
+              if (retry === MAX_RETRIES - 1) throw error;
+              await sleep(1000);
             }
           }
 
-          if (!detailsLoaded) {
-            throw new Error('Detalhes não carregaram corretamente');
-          }
+          await page.waitForSelector("h1.DUwDvf", { timeout: 5000 });
 
-          await sleep(2000);
-
-          // Captura os detalhes com seletores mais abrangentes
+          // Captura os detalhes com verificações mais robustas
           const details = await page.evaluate(() => {
-            const getTextContent = (selectors) => {
-              for (const selector of selectors) {
-                const element = document.querySelector(selector);
-                if (element) {
-                  const text = element.textContent.trim();
-                  if (text) return text;
-                }
-              }
-              return null;
+            const getTextContent = (selector) => {
+              const element = document.querySelector(selector);
+              return element ? element.textContent.trim() : null;
             };
 
-            const name = getTextContent([
-              'h1.DUwDvf',
-              'div.TIHn2',
-              'div.rogA2c'
-            ]) || "Nome não encontrado";
-
-            const address = getTextContent([
-              'button[data-item-id*="address"]',
-              'div[data-item-id*="address"]',
-              'div.rogA2c'
-            ]) || "Endereço não encontrado";
+            const name = getTextContent("h1.DUwDvf") || "Nome não encontrado";
+            const address = document.querySelector('button[data-item-id*="address"]')?.textContent?.trim() || 
+                           document.querySelector('div[data-item-id*="address"]')?.textContent?.trim() ||
+                           "Endereço não encontrado";
             
-            const phone = (() => {
-              const phoneButton = document.querySelector('button[data-item-id^="phone"]');
-              if (phoneButton) {
-                return phoneButton.getAttribute("aria-label")?.replace("Telefone: ", "")?.trim() ||
-                       phoneButton.textContent.trim();
-              }
-              const phoneDiv = document.querySelector('div[data-item-id^="phone"]');
-              return phoneDiv ? phoneDiv.textContent.trim() : "Telefone não encontrado";
-            })();
+            const phone = document.querySelector('button[data-item-id^="phone"]')?.getAttribute("aria-label")?.replace("Telefone: ", "")?.trim() || 
+                         document.querySelector('div[data-item-id^="phone"]')?.textContent?.trim() ||
+                         "Telefone não encontrado";
             
-            const website = (() => {
-              const links = [
-                'a[data-item-id*="authority"]',
-                'a[data-item-id*="website"]',
-                'a[data-tooltip*="site"]',
-                'div[data-tooltip*="site"] a'
-              ];
-              for (const selector of links) {
-                const element = document.querySelector(selector);
-                if (element?.href) return element.href;
-              }
-              return "Site não encontrado";
-            })();
+            const website = document.querySelector('a[data-item-id*="authority"]')?.href || 
+                           document.querySelector('a[data-item-id*="website"]')?.href ||
+                           "Site não encontrado";
 
             return { name, address, phone, website };
           });
 
-          if (details.name !== "Nome não encontrado") {
-            logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
-            results.push(details);
-            processedItems.add(details.name);
-          }
+          logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
+          results.push(details);
+          processedItems.add(cardId);
 
-          // Volta para a lista
-          await page.goBack({ waitUntil: "networkidle0" });
-          const listLoaded = await waitForSelector(".Nv2PK", 10000);
-          if (!listLoaded) {
-            throw new Error('Não foi possível voltar para a lista');
+          // Volta para a lista com retry mechanism
+          let backSuccess = false;
+          for (let retry = 0; retry < MAX_RETRIES && !backSuccess; retry++) {
+            try {
+              await page.goBack({ waitUntil: "networkidle0" });
+              await page.waitForSelector(".Nv2PK", { timeout: 5000 });
+              backSuccess = true;
+            } catch (error) {
+              if (retry === MAX_RETRIES - 1) throw error;
+              await sleep(1000);
+            }
           }
-          await sleep(2000);
 
         } catch (error) {
           logWithTime(`Erro ao processar card ${i + 1}: ${error.message}`);
@@ -241,13 +171,15 @@ app.get("/search", async (req, res) => {
             const isOnList = await page.$(".Nv2PK");
             if (!isOnList) {
               await page.goBack({ waitUntil: "networkidle0" });
-              await waitForSelector(".Nv2PK", 10000);
-              await sleep(2000);
+              await page.waitForSelector(".Nv2PK", { timeout: 5000 });
             }
           } catch (navError) {
             logWithTime(`Erro ao navegar de volta: ${navError.message}`);
           }
         }
+
+        // Rate limiting between cards
+        await sleep(RATE_LIMIT_DELAY);
       }
     }
 
@@ -265,8 +197,7 @@ app.get("/search", async (req, res) => {
         return { success: false };
       });
       
-      // Aguarda mais tempo para o carregamento no modo headless
-      await sleep(3000);
+      await sleep(2000);
       return scrollResult;
     }
 
@@ -274,24 +205,9 @@ app.get("/search", async (req, res) => {
     let previousHeight = 0;
     let sameHeightCount = 0;
     const maxAttempts = 15;
-    let lastProcessedCount = 0;
-    let noNewResultsCount = 0;
 
     for (let attempt = 0; attempt < maxAttempts && results.length < maxResults; attempt++) {
-      const beforeCount = results.length;
       await processVisibleCards();
-      const afterCount = results.length;
-      
-      // Se não encontrou novos resultados
-      if (afterCount === beforeCount) {
-        noNewResultsCount++;
-        if (noNewResultsCount >= 2) {
-          logWithTime("Nenhum novo resultado encontrado após múltiplas tentativas, finalizando...");
-          break;
-        }
-      } else {
-        noNewResultsCount = 0;
-      }
 
       const scrollResult = await scrollPage();
       if (!scrollResult.success) {
@@ -306,7 +222,7 @@ app.get("/search", async (req, res) => {
 
       if (currentHeight === previousHeight) {
         sameHeightCount++;
-        if (sameHeightCount >= 2) {
+        if (sameHeightCount >= 3) {
           logWithTime("Altura estabilizou, finalizando...");
           break;
         }
@@ -315,7 +231,6 @@ app.get("/search", async (req, res) => {
       }
 
       previousHeight = currentHeight;
-      lastProcessedCount = afterCount;
     }
 
     logWithTime(`Busca finalizada. Total de resultados: ${results.length}`);
@@ -338,6 +253,11 @@ app.get("/search", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
+
+// Configura timeout do servidor
+server.timeout = 300000; // 5 minutos
+server.keepAliveTimeout = 300000;
+server.headersTimeout = 301000;
