@@ -140,13 +140,50 @@ app.get("/search", async (req, res) => {
           }
         }
 
-        // Telefone - Usando o seletor correto com aria-label
+        // Telefone - Tentando múltiplos seletores
         let phone = "Telefone não encontrado";
-        const phoneButton = el.querySelector('button[aria-label^="Phone:"]');
-        if (phoneButton) {
-          const phoneText = phoneButton.getAttribute("aria-label");
-          if (phoneText) {
-            phone = phoneText.replace(/^Phone:\s*/, "").trim();
+        
+        // Array com diferentes seletores para tentar encontrar o telefone
+        const phoneSelectors = [
+          'button[aria-label^="Phone:"]',
+          'button[aria-label^="Telefone:"]',
+          'button[data-item-id*="phone:tel:"]',
+          'button[data-tooltip*="Ligar"]',
+          '[data-item-id*="phone:tel:"]',
+          'button[aria-label*="phone"]',
+          'button[aria-label*="telefone"]'
+        ];
+
+        // Tenta cada seletor até encontrar o telefone
+        for (const selector of phoneSelectors) {
+          const phoneElement = el.querySelector(selector);
+          if (phoneElement) {
+            // Tenta diferentes atributos
+            const phoneText = phoneElement.getAttribute('aria-label') || 
+                            phoneElement.getAttribute('data-item-id') || 
+                            phoneElement.getAttribute('data-tooltip') ||
+                            phoneElement.textContent;
+
+            if (phoneText) {
+              // Remove prefixos comuns
+              phone = phoneText
+                .replace(/^(Phone|Telefone):\s*/i, '')
+                .replace('phone:tel:', '')
+                .trim();
+              
+              if (phone && phone !== "Telefone não encontrado") {
+                break;
+              }
+            }
+          }
+        }
+
+        // Se encontrou um número, formata ele
+        if (phone !== "Telefone não encontrado") {
+          // Extrai apenas os números
+          const numbers = phone.replace(/[^\d]/g, '');
+          if (numbers.length >= 10) {
+            phone = numbers.replace(/^(\d{2})(\d{4,5})(\d{4})$/, '($1) $2-$3');
           }
         }
 
