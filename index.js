@@ -150,7 +150,8 @@ app.get("/search", async (req, res) => {
                   !part.includes("Compras na loja")
                 ) // Remove tipos de estabelecimento
                 .join(" · ") // Junta novamente com ·
-                .trim(); // Remove espaços extras
+                .trim() // Remove espaços extras
+                .replace(/^\s*·\s*/, ''); // Remove ponto e espaço no início
               
               if (address) break;
             }
