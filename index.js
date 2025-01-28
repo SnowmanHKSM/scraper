@@ -19,6 +19,7 @@ app.get("/search", async (req, res) => {
   try {
     const browser = await puppeteer.launch({
       headless: true,
+      executablePath: "/usr/bin/google-chrome", // Caminho do Chrome no Docker
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -58,7 +59,7 @@ app.get("/search", async (req, res) => {
 
           const addressButton = document.evaluate(
             "//button[contains(@data-item-id, 'address')]",
-            document,
+            el,
             null,
             XPathResult.FIRST_ORDERED_NODE_TYPE,
             null
@@ -67,7 +68,7 @@ app.get("/search", async (req, res) => {
 
           const phoneButton = document.evaluate(
             "//button[contains(@data-item-id, 'phone')]",
-            document,
+            el,
             null,
             XPathResult.FIRST_ORDERED_NODE_TYPE,
             null
@@ -76,7 +77,7 @@ app.get("/search", async (req, res) => {
 
           const websiteLink = document.evaluate(
             "//a[contains(@aria-label, 'Visitar site') or contains(@aria-label, 'Visit site')]",
-            document,
+            el,
             null,
             XPathResult.FIRST_ORDERED_NODE_TYPE,
             null
@@ -100,10 +101,13 @@ app.get("/search", async (req, res) => {
 
     await browser.close();
 
+    // Remove duplicados dos resultados
+    const uniqueResults = Array.from(new Map(allResults.map(item => [item.name, item])).values());
+
     // Retorna os resultados
     return res.json({
       term: searchTerm,
-      results: allResults,
+      results: uniqueResults,
     });
   } catch (error) {
     console.error("Erro ao realizar a pesquisa:", error);
