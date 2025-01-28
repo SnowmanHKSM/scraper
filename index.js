@@ -5,7 +5,7 @@ const app = express();
 
 // Função para formatar timestamp
 function getTimestamp() {
-  return new Date().toLocaleTimeString("pt-BR");
+  return new Date().toLocaleTimeString('pt-BR');
 }
 
 // Função para log com timestamp
@@ -29,16 +29,16 @@ app.get("/search", async (req, res) => {
   try {
     logWithTime(`Iniciando nova busca por: ${searchTerm}`);
     logWithTime("Iniciando navegador...");
-
+    
     const browser = await puppeteer.launch({
       headless: true,
       args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-accelerated-2d-canvas",
-        "--disable-gpu",
-        "--window-size=1920x1080",
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--window-size=1920x1080'
       ],
     });
 
@@ -59,7 +59,14 @@ app.get("/search", async (req, res) => {
     // Aguarda o carregamento dos resultados
     await page.waitForSelector(".Nv2PK", { timeout: 30000 });
 
-    // Sistema de rolagem melhorado
+    // Função para contar resultados atuais
+    const countResults = async () => {
+      return await page.evaluate(() => {
+        return document.querySelectorAll(".Nv2PK").length;
+      });
+    };
+
+    // Função para rolar a página
     async function scrollPage() {
       await page.evaluate(() => {
         const container = document.querySelector('div[role="feed"]');
@@ -68,12 +75,13 @@ app.get("/search", async (req, res) => {
           container.scrollTo(0, scrollHeight);
         }
       });
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
+    // Sistema de rolagem melhorado
     let previousResultCount = 0;
     let sameCountTimes = 0;
-    let maxScrolls = 50;
+    let maxScrolls = 50; // Aumentamos o limite de rolagens
     let currentScroll = 0;
 
     console.log("Iniciando captura de resultados...");
@@ -81,56 +89,97 @@ app.get("/search", async (req, res) => {
     while (currentScroll < maxScrolls) {
       currentScroll++;
       await scrollPage();
-
-      const currentResultCount = await page.evaluate(() => {
-        return document.querySelectorAll(".Nv2PK").length;
-      });
+      
+      const currentResultCount = await countResults();
       console.log(`Rolagem ${currentScroll}/${maxScrolls} - Resultados encontrados: ${currentResultCount}`);
 
+      // Se o número de resultados não aumentou
       if (currentResultCount === previousResultCount) {
         sameCountTimes++;
+        // Se ficou 3 vezes sem aumentar, provavelmente chegamos ao fim
         if (sameCountTimes >= 3) {
           console.log("Número de resultados estabilizou, parando a busca...");
           break;
         }
       } else {
-        sameCountTimes = 0;
+        sameCountTimes = 0; // Reseta o contador se encontrou novos resultados
       }
+
       previousResultCount = currentResultCount;
+      
+      // Pequena pausa extra a cada 10 rolagens para garantir carregamento
+      if (currentScroll % 10 === 0) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
     }
 
     logWithTime(`Iniciando extração de dados de ${previousResultCount} resultados...`);
-
     // Extrair os dados dos resultados
     const results = await page.evaluate(() => {
       const elements = document.querySelectorAll(".Nv2PK");
       return Array.from(elements).map((el) => {
+        // Nome do estabelecimento
         const nameElement = el.querySelector("h3.fontHeadlineSmall, .qBF1Pd");
         const name = nameElement ? nameElement.textContent.trim() : "Nome não encontrado";
 
+        // Endereço - Limpando e organizando
         let address = "Endereço não encontrado";
-        const addressElement = el.querySelector('button[data-item-id*="address"]');
+        const addressElement = el.querySelector('button[data-item-id*="address"], div[class*="fontBodyMedium"]');
         if (addressElement) {
-          const addressText = addressElement.getAttribute("aria-label");
-          address = addressText ? addressText.replace(/^Endereço:\s*/, "").trim() : address;
+          const fullText = addressElement.textContent.trim();
+          // Separando o endereço das informações adicionais
+          const parts = fullText.split(/(?:Fechado|Aberto|⋅)/);
+          if (parts.length > 0) {
+            // Remove nome do estabelecimento e informações extras
+            address = parts[0].replace(/^.*?(?=R\.|Av\.|Rua|Alameda|Travessa|Praça)/i, '')
+              .replace(/Barbearia/g, '')
+              .replace(/\d+,\d+\(\d+\)/g, '')  // Remove avaliações (ex: 4,8(271))
+              .replace(/·/g, '')
+              .replace(/\s+/g, ' ')
+              .trim();
+          }
         }
 
-        // Captura do telefone
+        // Telefone - Usando o seletor correto com aria-label
         let phone = "Telefone não encontrado";
-        const phoneButton = el.querySelector('button[data-item-id^="phone:tel:"]');
+        const phoneButton = el.querySelector('button[aria-label^="Phone:"]');
         if (phoneButton) {
-          const phoneText = phoneButton.getAttribute("data-item-id").replace(/^phone:tel:/, "").trim();
-          phone = phoneText.replace(/^55/, "+55 "); // Formata telefone com código do Brasil
+          const phoneText = phoneButton.getAttribute("aria-label");
+          if (phoneText) {
+            phone = phoneText.replace(/^Phone:\s*/, "").trim();
+          }
         }
 
-        // Captura do website
+        // Website - Melhorando a captura
         let website = "Site não encontrado";
-        const websiteElement = el.querySelector('a[href^="http"][aria-label^="Visitar site"]');
-        if (websiteElement) {
-          website = websiteElement.href.trim();
+        const websiteElements = [
+          ...el.querySelectorAll('a[data-item-id*="authority"]'),
+          ...el.querySelectorAll('a[data-item-id*="website"]'),
+          ...el.querySelectorAll('button[data-item-id*="authority"]'),
+          ...el.querySelectorAll('a[href*="http"]:not([href*="google"])')
+        ];
+        
+        for (const element of websiteElements) {
+          const href = element.getAttribute('href') || 
+                      element.getAttribute('data-url') || 
+                      element.getAttribute('data-item-id');
+          
+          if (href && 
+              !href.includes('google.com') && 
+              !href.includes('maps.google') &&
+              !href.includes('search?')) {
+            website = href.split('?')[0].trim();
+            break;
+          }
         }
 
-        return { name, address, phone, website };
+        // Retorna os dados organizados
+        return {
+          name: name.replace(/\s+/g, ' ').trim(),
+          address: address.replace(/\s+/g, ' ').trim(),
+          phone,
+          website: website.replace(/\s+/g, ' ').trim()
+        };
       });
     });
 
@@ -141,7 +190,7 @@ app.get("/search", async (req, res) => {
     logWithTime(`Busca finalizada! ${results.length} resultados encontrados`);
     logWithTime("Sistema pronto para nova busca!");
     console.log("----------------------------------------");
-
+    
     return res.json({
       term: searchTerm,
       total: results.length,
@@ -152,10 +201,10 @@ app.get("/search", async (req, res) => {
     logWithTime("Ocorreu um erro durante a busca!");
     logWithTime("Sistema pronto para nova busca!");
     console.log("----------------------------------------");
-
-    return res.status(500).json({
+    
+    return res.status(500).json({ 
       error: "Erro ao realizar a pesquisa.",
-      message: error.message,
+      message: error.message 
     });
   }
 });
