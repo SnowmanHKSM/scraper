@@ -10,7 +10,8 @@ const BATCH_SIZE = 10;
 
 let browser = null;
 let page = null;
-let processedItems = new Set(); // Movido para escopo global para manter entre requisições
+let currentSearchTerm = null;
+let totalProcessed = 0;
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -39,133 +40,111 @@ async function initBrowser() {
   }
 }
 
+async function scrollToBottom() {
+  await page.evaluate(() => {
+    const feed = document.querySelector('div[role="feed"]');
+    if (feed) {
+      feed.scrollTo(0, feed.scrollHeight);
+    }
+  });
+  await sleep(2000);
+}
+
 async function processSearch(searchTerm, startIndex, batchSize) {
   await initBrowser();
 
-  const url = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
-  if (startIndex === 0) {
+  // Se for uma nova busca ou se mudou o termo, reinicia tudo
+  if (searchTerm !== currentSearchTerm) {
+    currentSearchTerm = searchTerm;
+    totalProcessed = 0;
+    
+    const url = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
     await page.goto(url, { waitUntil: "networkidle2" });
-    processedItems.clear(); // Limpa os itens processados apenas quando começa uma nova busca
+    await sleep(2000);
+  }
+  // Se estiver voltando para o início, recarrega a página
+  else if (startIndex < totalProcessed) {
+    const url = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
+    await page.goto(url, { waitUntil: "networkidle2" });
+    await sleep(2000);
+    totalProcessed = 0;
   }
 
   const results = [];
-
-  async function processVisibleCards() {
-    try {
-      await page.waitForSelector(".Nv2PK", { timeout: 5000 });
-      const cards = await page.$$(".Nv2PK");
-      console.log(`Encontrados ${cards.length} cards visíveis`);
-
-      let processedInThisBatch = 0;
-
-      for (let i = 0; i < cards.length && processedInThisBatch < batchSize; i++) {
-        try {
-          const cardId = await page.evaluate((card) => {
-            const nameElement = card.querySelector('div[role="heading"]') || 
-                              card.querySelector('.fontHeadlineSmall');
-            return nameElement ? nameElement.textContent.trim() : null;
-          }, cards[i]);
-
-          if (!cardId || processedItems.has(cardId)) {
-            continue;
-          }
-
-          await cards[i].click();
-          await sleep(2000);
-
-          const details = await page.evaluate(() => {
-            const getTextContent = (selectors) => {
-              for (const selector of selectors) {
-                const element = document.querySelector(selector);
-                if (element) {
-                  return element.textContent.trim();
-                }
-              }
-              return null;
-            };
-
-            const name = getTextContent(["h1.DUwDvf", "div[role='heading']"]) || "Nome não encontrado";
-            const address = getTextContent(["button[data-item-id*='address']"]) || "Endereço não encontrado";
-            const phone = getTextContent(["button[data-item-id^='phone']"]) || "Telefone não encontrado";
-            const website = getTextContent(["a[data-item-id*='website']"]) || "Site não encontrado";
-
-            return { name, address, phone, website };
-          });
-
-          if (!results.some((result) => result.name === details.name && result.address === details.address)) {
-            results.push(details);
-            processedItems.add(cardId);
-            processedInThisBatch++;
-            console.log(`Dados capturados: ${JSON.stringify(details)}`);
-          }
-
-          await page.keyboard.press("Escape");
-          await sleep(1000);
-        } catch (cardError) {
-          console.log(`Erro ao processar card: ${cardError.message}`);
-          continue;
-        }
-      }
-
-      return processedInThisBatch;
-    } catch (error) {
-      console.log(`Erro ao processar cards: ${error.message}`);
-      return 0;
-    }
-  }
-
-  async function scrollPage() {
-    try {
-      const previousHeight = await page.evaluate(() => {
-        const feed = document.querySelector('div[role="feed"]');
-        if (feed) {
-          const height = feed.scrollHeight;
-          feed.scrollBy(0, height);
-          return height;
-        }
-        return 0;
-      });
-      
-      await sleep(3000);
-      
-      const newHeight = await page.evaluate(() => {
-        const feed = document.querySelector('div[role="feed"]');
-        return feed ? feed.scrollHeight : 0;
-      });
-      
-      return newHeight > previousHeight;
-    } catch (error) {
-      console.log(`Erro ao rolar página: ${error.message}`);
-      return false;
-    }
-  }
-
-  // Rola até encontrar novos resultados ou atingir o limite
-  let scrollCount = 0;
-  const maxScrolls = 10;
   
-  while (results.length < batchSize && scrollCount < maxScrolls) {
-    console.log(`Rolagem ${scrollCount + 1}`);
-    const hasMore = await scrollPage();
-    await processVisibleCards();
+  // Rola até encontrar novos cards
+  while (true) {
+    const cards = await page.$$(".Nv2PK");
+    console.log(`Encontrados ${cards.length} cards visíveis (Processados: ${totalProcessed}, Alvo: ${startIndex + batchSize})`);
     
-    if (!hasMore) {
+    if (cards.length > startIndex) {
       break;
     }
     
-    scrollCount++;
+    await scrollToBottom();
   }
 
-  const next = results.length === batchSize
-    ? `/search?term=${encodeURIComponent(searchTerm)}&start=${startIndex + batchSize}&batch_size=${batchSize}`
-    : null;
+  // Processa os cards do lote atual
+  const cards = await page.$$(".Nv2PK");
+  const startCard = startIndex;
+  const endCard = Math.min(startIndex + batchSize, cards.length);
 
-  return { 
-    start: startIndex, 
-    batch_size: batchSize, 
+  for (let i = startCard; i < endCard; i++) {
+    try {
+      // Verifica se o card ainda está válido
+      const isValid = await page.evaluate(card => {
+        return card.isConnected && document.contains(card);
+      }, cards[i]);
+
+      if (!isValid) continue;
+
+      await cards[i].click();
+      await sleep(2000);
+
+      const details = await page.evaluate(() => {
+        const getTextContent = (selectors) => {
+          for (const selector of selectors) {
+            const element = document.querySelector(selector);
+            if (element) {
+              return element.textContent.trim();
+            }
+          }
+          return null;
+        };
+
+        const name = getTextContent(["h1.DUwDvf", "div[role='heading']"]) || "Nome não encontrado";
+        const address = getTextContent(["button[data-item-id*='address']"]) || "Endereço não encontrado";
+        const phone = getTextContent(["button[data-item-id^='phone']"]) || "Telefone não encontrado";
+        const website = getTextContent(["a[data-item-id*='website']"]) || "Site não encontrado";
+
+        return { name, address, phone, website };
+      });
+
+      if (details.name !== "Nome não encontrado") {
+        results.push(details);
+        totalProcessed++;
+        console.log(`Dados capturados: ${JSON.stringify(details)}`);
+      }
+
+      await page.keyboard.press("Escape");
+      await sleep(1000);
+    } catch (error) {
+      console.log(`Erro ao processar card ${i}: ${error.message}`);
+      continue;
+    }
+  }
+
+  const hasMore = cards.length > endCard;
+  const next = hasMore ? `/search?term=${encodeURIComponent(searchTerm)}&start=${startIndex + results.length}&batch_size=${batchSize}` : null;
+
+  return {
+    searchTerm,
+    start: startIndex,
+    batch_size: batchSize,
     results,
     next,
-    total_processed: processedItems.size
+    total_processed: totalProcessed,
+    visible_cards: cards.length
   };
 }
 
