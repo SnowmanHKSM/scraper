@@ -1,6 +1,9 @@
 const express = require("express");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+const https = require("https");
+
+// Ativar Stealth Mode
 puppeteer.use(StealthPlugin());
 
 const app = express();
@@ -16,6 +19,9 @@ let searchResults = new Map();
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+/**
+ * 🔹 1️⃣ INICIAR O NAVEGADOR COM CONFIGURAÇÕES MAIS ESTÁVEIS
+ */
 async function initBrowser() {
   if (!browser) {
     browser = await puppeteer.launch({
@@ -27,19 +33,48 @@ async function initBrowser() {
         "--disable-accelerated-2d-canvas",
         "--disable-gpu",
         "--window-size=1920x1080",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-extensions",
+        "--disable-features=BlockInsecurePrivateNetworkRequests" // 🔥 EVITAR ERRO DE SSL
       ],
     });
 
     page = await browser.newPage();
     await page.setViewport({ width: 1920, height: 1080 });
+
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     );
+
     await page.setExtraHTTPHeaders({
       "Accept-Language": "pt-BR,pt;q=0.9",
     });
+
+    // 🔥 PREVENIR INTERRUPÇÕES DE REDE
+    page.on("error", (err) => console.error("Erro na página:", err));
+    page.on("requestfailed", (req) => console.error("Falha na requisição:", req.url(), req.failure()?.errorText));
   }
 }
+
+/**
+ * 🔹 2️⃣ MELHORAR A ESTABILIDADE DO EXPRESS
+ */
+app.use((req, res, next) => {
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("Keep-Alive", "timeout=10, max=100");
+  res.setHeader("Access-Control-Allow-Origin", "*"); // 🔥 EVITAR BLOQUEIOS DE CORS
+  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  next();
+});
+
+/**
+ * 🔹 3️⃣ SOLUÇÃO PARA ERRO DE SSL NO NODE.JS (TLS 1.2+)
+ */
+const agent = new https.Agent({
+  rejectUnauthorized: false, // 🔥 IGNORAR ERROS DE SSL
+  keepAlive: true, // 🔥 EVITAR CONEXÕES FECHADAS PREMATURAMENTE
+});
 
 async function getAllResults(searchTerm) {
   const url = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
@@ -51,7 +86,7 @@ async function getAllResults(searchTerm) {
   let previousLength = 0;
   let sameResultCount = 0;
   let totalScrolls = 0;
-  const MAX_SCROLLS = 20; // Limite máximo de scrolls para evitar loops infinitos
+  const MAX_SCROLLS = 20;
 
   while (totalScrolls < MAX_SCROLLS) {
     const cards = await page.$$(".Nv2PK");
@@ -59,12 +94,6 @@ async function getAllResults(searchTerm) {
 
     for (let i = previousLength; i < cards.length; i++) {
       try {
-        const isValid = await page.evaluate(card => {
-          return card.isConnected && document.contains(card);
-        }, cards[i]);
-
-        if (!isValid) continue;
-
         await cards[i].click();
         await sleep(2000);
 
@@ -97,7 +126,6 @@ async function getAllResults(searchTerm) {
         await sleep(1000);
       } catch (error) {
         console.log(`Erro ao processar card ${i}: ${error.message}`);
-        continue;
       }
     }
 
@@ -123,12 +151,13 @@ async function getAllResults(searchTerm) {
   return results;
 }
 
-// Endpoint para limpar o cache de resultados
+// 🔹 Endpoint para limpar cache
 app.post("/clear-cache", (req, res) => {
   searchResults.clear();
   res.json({ message: "Cache limpo com sucesso" });
 });
 
+// 🔹 Rota principal de busca
 app.get("/search", async (req, res) => {
   const searchTerm = req.query.term;
   const startIndex = parseInt(req.query.start) || 0;
@@ -161,28 +190,25 @@ app.get("/search", async (req, res) => {
         batch_size: batchSize,
         has_more: hasMore,
         next_start: nextStart,
-        results: batch
-      }
+        results: batch,
+      },
     });
   } catch (error) {
     console.error(`Erro durante a execução:`, error);
-    return res.status(500).json({ 
+    return res.status(500).json({
       success: false,
       error: error.message,
-      details: error.stack
+      details: error.stack,
     });
   }
 });
 
-// Adiciona um handler para SIGINT para fechar o browser gracefully
-process.on('SIGINT', async () => {
-  if (browser) {
-    await browser.close();
-  }
+process.on("SIGINT", async () => {
+  if (browser) await browser.close();
   process.exit();
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
+  console.log(`🔥 Servidor rodando na porta ${PORT}`);
 });
