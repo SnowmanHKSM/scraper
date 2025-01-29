@@ -49,15 +49,10 @@ app.get("/search", async (req, res) => {
     const end = start + ITEMS_PER_PAGE;
     const pageResults = cachedResults.slice(start, end);
 
-    // Se não há mais resultados, indica que a paginação terminou
+    // Se não há mais resultados, retorna array vazio
     if (pageResults.length === 0) {
       searchCache.delete(searchKey); // Limpa o cache
-      return res.json({ 
-        finished: true,
-        results: [],
-        totalResults: cachedResults.length,
-        currentPage: page
-      });
+      return res.json([]);
     }
 
     return res.json({
@@ -168,17 +163,11 @@ app.get("/search", async (req, res) => {
       if (browser) {
         await browser.close();
       }
-      return res.status(500).json({ 
-        error: error.message,
-        finished: true
-      });
+      return res.json([]); // Em caso de erro, retorna array vazio
     }
   } else {
-    // Se não é a primeira página e não tem cache, algo deu errado
-    return res.status(400).json({ 
-      error: "Busca não encontrada. Inicie novamente da página 1.",
-      finished: true
-    });
+    // Se não é a primeira página e não tem cache, retorna array vazio
+    return res.json([]);
   }
 });
 
