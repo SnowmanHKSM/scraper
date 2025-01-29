@@ -26,10 +26,13 @@ RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add
     apt-get update && apt-get install -y google-chrome-stable && \
     rm -rf /var/lib/apt/lists/*
 
-# Variáveis de ambiente para o Puppeteer
+# Variáveis de ambiente para o Puppeteer e SSL
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
 ENV PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage
+ENV NODE_TLS_REJECT_UNAUTHORIZED=0
+ENV HTTPS=false
+ENV PORT=3000
 
 # Configurar diretório de trabalho
 WORKDIR /app
@@ -43,5 +46,5 @@ RUN npm install
 # Expor a porta do servidor
 EXPOSE 3000
 
-# Comando de inicialização
-CMD ["node", "index.js"]
+# Comando de inicialização com configurações de SSL
+CMD ["sh", "-c", "NODE_TLS_REJECT_UNAUTHORIZED=0 HTTPS=false node index.js"]

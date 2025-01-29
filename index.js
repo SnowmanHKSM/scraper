@@ -2,18 +2,8 @@ const express = require("express");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const cors = require('cors');
-const https = require('https');
+const http = require('http');
 puppeteer.use(StealthPlugin());
-
-// Configurar agent HTTPS com SSL flexível
-const agent = new https.Agent({
-  rejectUnauthorized: false,
-  keepAlive: true,
-  keepAliveMsecs: 3000000,
-  maxSockets: 100,
-  maxFreeSockets: 10,
-  timeout: 3000000
-});
 
 const app = express();
 
@@ -21,15 +11,7 @@ const app = express();
 app.options('*', cors());
 
 // Configurações CORS mais permissivas
-app.use(cors({
-  origin: '*',
-  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-  allowedHeaders: '*',
-  exposedHeaders: '*',
-  credentials: true,
-  maxAge: 86400,
-  preflightContinue: true
-}));
+app.use(cors());
 
 // Parser para JSON com limite aumentado
 app.use(express.json({ limit: '50mb' }));
@@ -146,7 +128,7 @@ app.get("/search", async (req, res) => {
       'Accept-Language': 'pt-BR,pt;q=0.9',
     });
 
-    const url = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
+    const url = `http://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
     await page.goto(url, { waitUntil: "networkidle2" });
     
     let retries = 0;
@@ -156,7 +138,7 @@ app.get("/search", async (req, res) => {
         const selectors = [
           'div[role="article"]',
           '.Nv2PK',
-          'a[href^="https://www.google.com/maps/place"]',
+          'a[href^="http://www.google.com/maps/place"]',
           'div[jsaction*="mouseover:pane.proxy"]'
         ];
         
@@ -419,7 +401,8 @@ app.get("/search", async (req, res) => {
 
 // Inicia o servidor
 const PORT = process.env.PORT || 3000;
-const server = app.listen(PORT, '0.0.0.0', () => {
+const server = http.createServer(app);
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   console.log(`Para fazer uma busca, acesse: http://localhost:${PORT}/search?term=sua+busca`);
 });
