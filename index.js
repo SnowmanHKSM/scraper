@@ -2,20 +2,38 @@ const express = require("express");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const cors = require('cors');
+const https = require('https');
 puppeteer.use(StealthPlugin());
+
+// Configurar agent HTTPS com SSL flexível
+const agent = new https.Agent({
+  rejectUnauthorized: false,
+  keepAlive: true,
+  keepAliveMsecs: 3000000,
+  maxSockets: 100,
+  maxFreeSockets: 10,
+  timeout: 3000000
+});
 
 const app = express();
 
-// Configurações CORS
+// Tratamento especial para OPTIONS
+app.options('*', cors());
+
+// Configurações CORS mais permissivas
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Connection', 'Keep-Alive'],
+  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+  allowedHeaders: '*',
+  exposedHeaders: '*',
   credentials: true,
-  maxAge: 86400
+  maxAge: 86400,
+  preflightContinue: true
 }));
 
-app.use(express.json());
+// Parser para JSON com limite aumentado
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Configurações
 const RATE_LIMIT_DELAY = 2000;
@@ -26,17 +44,26 @@ const TIMEOUT = 45 * 60 * 1000; // 45 minutos em milissegundos
 app.use((req, res, next) => {
   // Headers para manter a conexão viva
   res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Keep-Alive', 'timeout=900');
+  res.setHeader('Keep-Alive', 'timeout=2700000');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', '*');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400');
   
-  // Headers de segurança
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  // Remover headers de segurança restritivos
+  res.removeHeader('X-Frame-Options');
+  res.removeHeader('Strict-Transport-Security');
+  res.removeHeader('X-Content-Type-Options');
   
   // Configurar timeout da resposta
   res.setTimeout(TIMEOUT, () => {
     logWithTime('Requisição ainda em processamento...');
   });
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
   
   next();
 });
@@ -399,8 +426,8 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 
 // Configurar timeout do servidor
 server.timeout = TIMEOUT;
-server.keepAliveTimeout = 910 * 1000; // Maior que o timeout do n8n
-server.headersTimeout = 915 * 1000; // Maior que o keepAliveTimeout
+server.keepAliveTimeout = 3000000; // 50 minutos
+server.headersTimeout = 3100000; // 51 minutos e 40 segundos
 
 // Tratamento de erros do servidor
 server.on('error', (error) => {
