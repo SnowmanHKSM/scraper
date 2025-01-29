@@ -1,182 +1,171 @@
-const express = require("express");
-const puppeteer = require("puppeteer-extra");
-const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+const express = require('express');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
+const axios = require('axios');
 
 puppeteer.use(StealthPlugin());
 
 const app = express();
 app.use(cors());
-app.use(express.json());
 
-// Cache para armazenar resultados das buscas
-const searchCache = new Map();
+// Configuração do webhook do n8n
+const N8N_WEBHOOK = process.env.N8N_WEBHOOK || 'http://localhost:5678/webhook/places';
+const BATCH_SIZE = 10;
 
-// Configurações
-const RATE_LIMIT_DELAY = 2000;
-const MAX_RETRIES = 3;
-const ITEMS_PER_PAGE = 10;
-const TIMEOUT = 45 * 60 * 1000;
-
-function getTimestamp() {
-  return new Date().toLocaleTimeString("pt-BR");
+async function sendToN8N(batch, query, batchNumber) {
+  try {
+    await axios.post(N8N_WEBHOOK, {
+      query,
+      batchNumber,
+      results: batch,
+      timestamp: new Date().toISOString()
+    });
+    console.log(`[${new Date().toLocaleTimeString()}] Lote ${batchNumber} enviado para n8n`);
+  } catch (error) {
+    console.error(`Erro ao enviar lote ${batchNumber} para n8n:`, error.message);
+  }
 }
 
-function logWithTime(message) {
-  console.log(`[${getTimestamp()}] ${message}`);
-}
-
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-app.get("/", (req, res) => {
-  res.send("Bem-vindo ao Scraper Google Maps");
+app.get('/', (req, res) => {
+  res.send('Google Maps Scraper - Use /search?term=sua+busca');
 });
 
-async function extractPlacesFromGoogle(searchQuery, page = 1) {
-    console.log(`[${new Date().toLocaleTimeString()}] Iniciando nova busca por: ${searchQuery}`);
-    
-    const browser = await puppeteer.launch({
-        headless: "new",
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--disable-gpu',
-            '--window-size=1920x1080',
-        ],
+app.get('/search', async (req, res) => {
+  const query = req.query.term;
+  
+  if (!query) {
+    return res.status(400).json({ error: 'Termo de busca é obrigatório' });
+  }
+
+  console.log(`[${new Date().toLocaleTimeString()}] Buscando: ${query}`);
+  
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--window-size=1920x1080',
+      ]
     });
 
-    try {
-        const page = await browser.newPage();
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
+    
+    const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
+    await page.goto(searchUrl, { waitUntil: 'networkidle0', timeout: 30000 });
+    
+    let currentBatch = [];
+    let batchNumber = 1;
+    let totalResults = 0;
+    let lastResultsCount = 0;
+    let noNewResultsCount = 0;
+    
+    // Função para extrair e enviar resultados
+    const extractAndSendResults = async () => {
+      const newResults = await page.evaluate(() => {
+        const places = [];
+        const items = document.querySelectorAll('a[href^="https://www.google.com/maps/place"]');
         
-        // Configurar timeout maior para navegação
-        await page.setDefaultNavigationTimeout(30000);
-        await page.setDefaultTimeout(30000);
-        
-        // Configurar user agent
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
-        
-        // Ir para Google Maps
-        await page.goto('https://www.google.com/maps', { waitUntil: 'networkidle0' });
-        
-        // Esperar e preencher campo de busca
-        const searchBox = await page.waitForSelector('#searchboxinput');
-        await searchBox.type(searchQuery);
-        await page.keyboard.press('Enter');
-        
-        // Esperar carregamento dos resultados
-        await page.waitForSelector('div[role="feed"]', { timeout: 10000 });
-        
-        // Aguardar um momento para carregar resultados
-        await page.waitForTimeout(2000);
-        
-        // Rolar para carregar mais resultados
-        for(let i = 0; i < 3; i++) {
-            await page.evaluate(() => {
-                const feed = document.querySelector('div[role="feed"]');
-                if (feed) {
-                    feed.scrollTop = feed.scrollHeight;
-                }
-            });
-            await page.waitForTimeout(1000);
-        }
-        
-        // Extrair dados
-        const results = await page.evaluate(() => {
-            const items = document.querySelectorAll('div[role="article"]');
-            return Array.from(items).map(item => {
-                try {
-                    const title = item.querySelector('div[role="heading"]')?.textContent || '';
-                    const rating = item.querySelector('span[role="img"]')?.getAttribute('aria-label') || '';
-                    const address = Array.from(item.querySelectorAll('div[class] div[class]'))
-                        .map(div => div.textContent)
-                        .find(text => text.includes('·') || text.includes(',')) || '';
-                        
-                    return {
-                        title: title.trim(),
-                        rating: rating.replace('Classificação: ', '').trim(),
-                        address: address.split('·').pop()?.trim() || address.trim()
-                    };
-                } catch (err) {
-                    console.error('Erro ao extrair dados do item:', err);
-                    return null;
-                }
-            }).filter(item => item && item.title);
+        items.forEach(item => {
+          try {
+            const titleEl = item.querySelector('div[class] div[class] div[class] div[class]:first-child');
+            const ratingEl = item.querySelector('span[aria-label*="classificação"]');
+            const addressEl = item.querySelector('div[class] div[class] div[class] div[class]:nth-child(2)');
+            
+            if (titleEl) {
+              const title = titleEl.textContent.trim();
+              const rating = ratingEl ? ratingEl.getAttribute('aria-label') : '';
+              const address = addressEl ? addressEl.textContent.trim() : '';
+              
+              places.push({
+                title,
+                rating: rating ? rating.replace('classificação:', '').trim() : 'Sem avaliação',
+                address: address || 'Endereço não disponível'
+              });
+            }
+          } catch (err) {
+            console.error('Erro ao extrair item:', err);
+          }
         });
-
-        console.log(`[${new Date().toLocaleTimeString()}] Busca finalizada. Total de resultados: ${results.length}`);
         
-        // Retornar página específica de resultados
-        const itemsPerPage = 10;
-        const startIndex = (page - 1) * itemsPerPage;
-        const paginatedResults = results.slice(startIndex, startIndex + itemsPerPage);
-        
-        return {
-            results: paginatedResults,
-            total: results.length,
-            page: page,
-            totalPages: Math.ceil(results.length / itemsPerPage)
-        };
+        return places;
+      });
 
-    } catch (error) {
-        console.error('Erro durante a extração:', error);
-        return {
-            results: [],
-            total: 0,
-            page: page,
-            totalPages: 0,
-            error: error.message
-        };
-    } finally {
-        await browser.close();
-    }
-}
+      // Filtra resultados duplicados
+      const uniqueResults = newResults.filter(result => 
+        !currentBatch.some(existing => existing.title === result.title)
+      );
 
-app.get("/search", async (req, res) => {
-  const searchTerm = req.query.term;
-  const page = parseInt(req.query.page) || 1;
-  const maxResults = parseInt(req.query.max) || 100;
+      // Adiciona novos resultados ao lote atual
+      currentBatch.push(...uniqueResults);
 
-  if (!searchTerm) {
-    return res.status(400).json([]);
-  }
+      // Se temos um lote completo, envia para o n8n
+      while (currentBatch.length >= BATCH_SIZE) {
+        const batchToSend = currentBatch.splice(0, BATCH_SIZE);
+        await sendToN8N(batchToSend, query, batchNumber++);
+        totalResults += batchToSend.length;
+      }
 
-  // Gera uma chave única para esta busca
-  const searchKey = `${searchTerm}_${maxResults}`;
+      return uniqueResults.length;
+    };
 
-  // Verifica se já temos resultados em cache
-  if (searchCache.has(searchKey)) {
-    const cachedResults = searchCache.get(searchKey);
-    const start = (page - 1) * ITEMS_PER_PAGE;
-    const end = start + ITEMS_PER_PAGE;
-    const pageResults = cachedResults.slice(start, end);
+    // Loop principal de scraping
+    while (noNewResultsCount < 3) { // Para após 3 tentativas sem novos resultados
+      // Extrai e envia resultados atuais
+      const newResultsCount = await extractAndSendResults();
+      
+      if (newResultsCount === 0) {
+        noNewResultsCount++;
+      } else {
+        noNewResultsCount = 0;
+      }
 
-    // Se não há mais resultados, retorna array vazio
-    if (pageResults.length === 0) {
-      searchCache.delete(searchKey);
-      return res.json([]);
+      // Rola a página para carregar mais resultados
+      await page.evaluate(() => {
+        const feed = document.querySelector('div[role="feed"]');
+        if (feed) {
+          feed.scrollTop = feed.scrollHeight;
+        }
+      });
+
+      // Aguarda carregamento de novos resultados
+      await page.waitForTimeout(2000);
     }
 
-    logWithTime(`Retornando página ${page} do cache para: ${searchTerm}`);
-    return res.json(pageResults);
-  }
+    // Envia o último lote (mesmo que incompleto)
+    if (currentBatch.length > 0) {
+      await sendToN8N(currentBatch, query, batchNumber);
+      totalResults += currentBatch.length;
+    }
 
-  // Se não é a primeira página e não tem cache, retorna vazio
-  if (page > 1) {
-    return res.json([]);
-  }
+    console.log(`[${new Date().toLocaleTimeString()}] Busca finalizada. Total enviado: ${totalResults} resultados`);
+    
+    return res.json({
+      success: true,
+      totalResults,
+      batches: batchNumber,
+      message: `Resultados enviados em ${batchNumber} lotes para o n8n`
+    });
 
-  const result = await extractPlacesFromGoogle(searchTerm, page);
-  
-  // Armazena os resultados em cache
-  searchCache.set(searchKey, result.results);
-  
-  // Retorna a primeira página
-  return res.json(result.results);
+  } catch (error) {
+    console.error('Erro:', error);
+    return res.status(500).json({ 
+      error: 'Erro ao buscar resultados',
+      details: error.message 
+    });
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
+  }
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
