@@ -4,13 +4,15 @@ const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 puppeteer.use(StealthPlugin());
 
 const app = express();
+app.use(express.json());
+
 const RATE_LIMIT_DELAY = 2000;
 const MAX_RETRIES = 3;
 const BATCH_SIZE = 10;
 
 let browser = null;
 let page = null;
-let searchResults = new Map(); // Armazena os resultados por termo de busca
+let searchResults = new Map();
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -48,8 +50,10 @@ async function getAllResults(searchTerm) {
   const processedNames = new Set();
   let previousLength = 0;
   let sameResultCount = 0;
+  let totalScrolls = 0;
+  const MAX_SCROLLS = 20; // Limite máximo de scrolls para evitar loops infinitos
 
-  while (true) {
+  while (totalScrolls < MAX_SCROLLS) {
     const cards = await page.$$(".Nv2PK");
     console.log(`Encontrados ${cards.length} cards visíveis`);
 
@@ -99,14 +103,14 @@ async function getAllResults(searchTerm) {
 
     if (cards.length === previousLength) {
       sameResultCount++;
-      if (sameResultCount >= 3) break; // Se não encontrar novos resultados após 3 tentativas, para
+      if (sameResultCount >= 3) break;
     } else {
       sameResultCount = 0;
     }
 
     previousLength = cards.length;
+    totalScrolls++;
 
-    // Scroll
     await page.evaluate(() => {
       const feed = document.querySelector('div[role="feed"]');
       if (feed) {
@@ -118,6 +122,12 @@ async function getAllResults(searchTerm) {
 
   return results;
 }
+
+// Endpoint para limpar o cache de resultados
+app.post("/clear-cache", (req, res) => {
+  searchResults.clear();
+  res.json({ message: "Cache limpo com sucesso" });
+});
 
 app.get("/search", async (req, res) => {
   const searchTerm = req.query.term;
@@ -131,7 +141,6 @@ app.get("/search", async (req, res) => {
   try {
     await initBrowser();
 
-    // Se não temos os resultados em cache ou é uma nova busca
     if (!searchResults.has(searchTerm)) {
       const allResults = await getAllResults(searchTerm);
       searchResults.set(searchTerm, allResults);
@@ -140,18 +149,37 @@ app.get("/search", async (req, res) => {
     const results = searchResults.get(searchTerm);
     const batch = results.slice(startIndex, startIndex + batchSize);
     const hasMore = startIndex + batchSize < results.length;
+    const nextStart = hasMore ? startIndex + batchSize : null;
 
     res.json({
-      total: results.length,
-      start: startIndex,
-      batch_size: batchSize,
-      results: batch,
-      next: hasMore ? `/search?term=${encodeURIComponent(searchTerm)}&start=${startIndex + batchSize}&batch_size=${batchSize}` : null
+      success: true,
+      data: {
+        total_results: results.length,
+        current_page: Math.floor(startIndex / batchSize) + 1,
+        total_pages: Math.ceil(results.length / batchSize),
+        start_index: startIndex,
+        batch_size: batchSize,
+        has_more: hasMore,
+        next_start: nextStart,
+        results: batch
+      }
     });
   } catch (error) {
-    console.log(`Erro durante a execução: ${error.message}`);
-    return res.status(500).json({ error: error.message });
+    console.error(`Erro durante a execução:`, error);
+    return res.status(500).json({ 
+      success: false,
+      error: error.message,
+      details: error.stack
+    });
   }
+});
+
+// Adiciona um handler para SIGINT para fechar o browser gracefully
+process.on('SIGINT', async () => {
+  if (browser) {
+    await browser.close();
+  }
+  process.exit();
 });
 
 const PORT = process.env.PORT || 3000;
