@@ -1,9 +1,7 @@
 const express = require("express");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
-const https = require("https");
 
-// Ativar Stealth Mode
 puppeteer.use(StealthPlugin());
 
 const app = express();
@@ -19,9 +17,6 @@ let searchResults = new Map();
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-/**
- * 🔹 1️⃣ INICIAR O NAVEGADOR COM CONFIGURAÇÕES MAIS ESTÁVEIS
- */
 async function initBrowser() {
   if (!browser) {
     browser = await puppeteer.launch({
@@ -35,45 +30,29 @@ async function initBrowser() {
         "--window-size=1920x1080",
         "--disable-blink-features=AutomationControlled",
         "--disable-extensions",
-        "--disable-features=BlockInsecurePrivateNetworkRequests" // 🔥 EVITAR ERRO DE SSL
       ],
     });
 
     page = await browser.newPage();
     await page.setViewport({ width: 1920, height: 1080 });
-
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     );
-
     await page.setExtraHTTPHeaders({
       "Accept-Language": "pt-BR,pt;q=0.9",
     });
 
-    // 🔥 PREVENIR INTERRUPÇÕES DE REDE
     page.on("error", (err) => console.error("Erro na página:", err));
     page.on("requestfailed", (req) => console.error("Falha na requisição:", req.url(), req.failure()?.errorText));
   }
 }
 
-/**
- * 🔹 2️⃣ MELHORAR A ESTABILIDADE DO EXPRESS
- */
+// Middleware para CORS e headers de segurança
 app.use((req, res, next) => {
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("Keep-Alive", "timeout=10, max=100");
-  res.setHeader("Access-Control-Allow-Origin", "*"); // 🔥 EVITAR BLOQUEIOS DE CORS
-  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   next();
-});
-
-/**
- * 🔹 3️⃣ SOLUÇÃO PARA ERRO DE SSL NO NODE.JS (TLS 1.2+)
- */
-const agent = new https.Agent({
-  rejectUnauthorized: false, // 🔥 IGNORAR ERROS DE SSL
-  keepAlive: true, // 🔥 EVITAR CONEXÕES FECHADAS PREMATURAMENTE
 });
 
 async function getAllResults(searchTerm) {
@@ -151,13 +130,11 @@ async function getAllResults(searchTerm) {
   return results;
 }
 
-// 🔹 Endpoint para limpar cache
 app.post("/clear-cache", (req, res) => {
   searchResults.clear();
-  res.json({ message: "Cache limpo com sucesso" });
+  res.json({ success: true, message: "Cache limpo com sucesso" });
 });
 
-// 🔹 Rota principal de busca
 app.get("/search", async (req, res) => {
   const searchTerm = req.query.term;
   const startIndex = parseInt(req.query.start) || 0;
@@ -178,31 +155,31 @@ app.get("/search", async (req, res) => {
     const results = searchResults.get(searchTerm);
     const batch = results.slice(startIndex, startIndex + batchSize);
     const hasMore = startIndex + batchSize < results.length;
-    const nextStart = hasMore ? startIndex + batchSize : null;
 
-    res.json({
-      success: true,
-      data: {
-        total_results: results.length,
-        current_page: Math.floor(startIndex / batchSize) + 1,
-        total_pages: Math.ceil(results.length / batchSize),
-        start_index: startIndex,
-        batch_size: batchSize,
-        has_more: hasMore,
-        next_start: nextStart,
-        results: batch,
-      },
-    });
+    // Formato específico para o n8n
+    const response = batch.map(item => ({
+      json: {
+        name: item.name,
+        address: item.address,
+        phone: item.phone,
+        website: item.website
+      }
+    }));
+
+    // Se não houver mais resultados, retorna array vazio para o n8n parar
+    if (!hasMore) {
+      res.json([]);
+    } else {
+      res.json(response);
+    }
+
   } catch (error) {
     console.error(`Erro durante a execução:`, error);
-    return res.status(500).json({
-      success: false,
-      error: error.message,
-      details: error.stack,
-    });
+    res.status(500).json([]);  // Retorna array vazio em caso de erro para o n8n parar
   }
 });
 
+// Graceful shutdown
 process.on("SIGINT", async () => {
   if (browser) await browser.close();
   process.exit();
