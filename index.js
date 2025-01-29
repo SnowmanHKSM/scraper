@@ -21,15 +21,15 @@ function logWithTime(message) {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function sendToN8N(batch, searchTerm) {
+async function sendBatchToN8N(batch, searchTerm) {
   try {
     await axios.post(N8N_WEBHOOK_URL, {
       searchTerm,
       results: batch
     });
-    logWithTime(`Enviado lote de ${batch.length} resultados para n8n`);
+    logWithTime(`Lote de ${batch.length} resultados enviado para n8n`);
   } catch (error) {
-    logWithTime(`Erro ao enviar para n8n: ${error.message}`);
+    logWithTime(`Erro ao enviar lote para n8n: ${error.message}`);
   }
 }
 
@@ -117,6 +117,7 @@ app.get("/search", async (req, res) => {
 
     const results = [];
     let processedItems = new Set();
+    let currentBatch = [];
 
     async function processVisibleCards() {
       try {
@@ -244,15 +245,15 @@ app.get("/search", async (req, res) => {
 
             if (!isDuplicate && details.name !== "Nome não encontrado") {
               results.push(details);
+              currentBatch.push(details);
               processedItems.add(cardId);
               processedCount++;
               logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
 
               // Verifica se completou um lote de 15 resultados
-              if (results.length % BATCH_SIZE === 0) {
-                const startIndex = results.length - BATCH_SIZE;
-                const batch = results.slice(startIndex);
-                await sendToN8N(batch, searchTerm);
+              if (currentBatch.length >= BATCH_SIZE) {
+                await sendBatchToN8N(currentBatch, searchTerm);
+                currentBatch = []; // Limpa o lote atual
               }
             } else {
               logWithTime(`Item duplicado ignorado: ${details.name}`);
@@ -351,26 +352,17 @@ app.get("/search", async (req, res) => {
 
     logWithTime(`Busca finalizada. Total de resultados: ${results.length}`);
     
-    // Envia o último lote caso haja resultados restantes
-    const remainingCount = results.length % BATCH_SIZE;
-    if (remainingCount > 0) {
-      const startIndex = results.length - remainingCount;
-      const batch = results.slice(startIndex);
-      await sendToN8N(batch, searchTerm);
+    // Envia o último lote se houver resultados restantes
+    if (currentBatch.length > 0) {
+      await sendBatchToN8N(currentBatch, searchTerm);
     }
-    
+
     await browser.close();
     logWithTime("Navegador fechado com sucesso");
 
-    // Retorna apenas o lote atual de 15 resultados
-    const currentBatch = results.slice(startIndex, startIndex + BATCH_SIZE);
-    const hasMore = startIndex + BATCH_SIZE < results.length;
-
     return res.json({
       total: results.length,
-      currentBatch,
-      hasMore,
-      nextStartIndex: hasMore ? startIndex + BATCH_SIZE : null
+      results: results
     });
 
   } catch (error) {
