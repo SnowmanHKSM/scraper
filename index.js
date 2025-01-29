@@ -12,6 +12,9 @@ const BATCH_SIZE = 10; // Define o tamanho do lote de dados
 let browser = null; // Manter uma única instância do navegador
 let page = null;
 
+// 🔥 Função sleep corrigida
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function initBrowser() {
   if (!browser) {
     browser = await puppeteer.launch({
@@ -69,7 +72,7 @@ async function processSearch(searchTerm, startIndex, batchSize) {
 
           seenCards.add(cardId);
           await cards[i].click();
-          await sleep(2000);
+          await sleep(2000); // 🔥 Sleep corrigido
 
           const details = await page.evaluate(() => {
             const getTextContent = (selectors) => {
