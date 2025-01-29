@@ -5,11 +5,10 @@ const axios = require('axios');
 puppeteer.use(StealthPlugin());
 
 const app = express();
+
 const RATE_LIMIT_DELAY = 2000;
 const MAX_RETRIES = 3;
-
-// URL do webhook do n8n
-const N8N_WEBHOOK_URL = 'https://primary-production-270f.up.railway.app/webhook-test/da3a1250-7da8-4193-9e05-3c7e9bc45ba9';
+const BATCH_SIZE = 15;
 
 function getTimestamp() {
   return new Date().toLocaleTimeString("pt-BR");
@@ -21,39 +20,7 @@ function logWithTime(message) {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function sendResultsToN8N(results, searchTerm, scrollNumber, isLastBatch) {
-  try {
-    await axios.post(N8N_WEBHOOK_URL, {
-      searchTerm,
-      scrollNumber,
-      results,
-      isLastBatch,
-      totalResults: results.length,
-      timestamp: new Date().toISOString()
-    });
-    logWithTime(`Lote #${scrollNumber} com ${results.length} resultados enviado para n8n`);
-    return true;
-  } catch (error) {
-    logWithTime(`Erro ao enviar lote #${scrollNumber} para n8n: ${error.message}`);
-    // Tenta novamente após um breve delay
-    await sleep(2000);
-    try {
-      await axios.post(N8N_WEBHOOK_URL, {
-        searchTerm,
-        scrollNumber,
-        results,
-        isLastBatch,
-        totalResults: results.length,
-        timestamp: new Date().toISOString()
-      });
-      logWithTime(`Lote #${scrollNumber} enviado com sucesso na segunda tentativa`);
-      return true;
-    } catch (retryError) {
-      logWithTime(`Falha definitiva ao enviar lote #${scrollNumber}: ${retryError.message}`);
-      return false;
-    }
-  }
-}
+app.use(express.json());
 
 app.get("/", (req, res) => {
   res.send("Bem-vindo ao Scraper Google Maps");
@@ -62,29 +29,20 @@ app.get("/", (req, res) => {
 app.get("/search", async (req, res) => {
   const searchTerm = req.query.term;
   const maxResults = parseInt(req.query.max) || 100;
+  const startIndex = parseInt(req.query.start) || 0;
 
   if (!searchTerm) {
     return res.status(400).json({ error: "O parâmetro 'term' é obrigatório." });
   }
 
-  // Responde imediatamente que começou o scraping
-  res.json({ 
-    status: "started", 
-    message: `Iniciando scraping para: ${searchTerm}. Os resultados serão enviados via webhook.` 
-  });
-
   let browser;
-  const allResults = [];
-  let processedItems = new Set();
-  let currentScrollResults = [];
-  let scrollNumber = 0;
 
   try {
     logWithTime(`Iniciando nova busca por: ${searchTerm}`);
     logWithTime("Iniciando navegador...");
 
     browser = await puppeteer.launch({
-      headless: false,
+      headless: "new",
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -92,6 +50,8 @@ app.get("/search", async (req, res) => {
         "--disable-accelerated-2d-canvas",
         "--disable-gpu",
         "--window-size=1920x1080",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-extensions",
       ],
     });
 
@@ -271,8 +231,7 @@ app.get("/search", async (req, res) => {
             });
 
             if (!isDuplicate && details.name !== "Nome não encontrado") {
-              currentScrollResults.push(details);
-              allResults.push(details);
+              results.push(details);
               processedItems.add(cardId);
               processedCount++;
               logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
@@ -294,17 +253,6 @@ app.get("/search", async (req, res) => {
             logWithTime(`Erro ao processar card: ${cardError.message}`);
             continue;
           }
-        }
-
-        // Após processar todos os cards visíveis, envia os resultados desta rolagem
-        if (currentScrollResults.length > 0) {
-          scrollNumber++;
-          const isLastBatch = !hasMoreResults || allResults.length >= maxResults;
-          const sent = await sendResultsToN8N(currentScrollResults, searchTerm, scrollNumber, isLastBatch);
-          if (!sent) {
-            logWithTime(`Não foi possível enviar o lote #${scrollNumber}. Continuando...`);
-          }
-          currentScrollResults = []; // Limpa para a próxima rolagem
         }
 
         return processedCount;
@@ -382,9 +330,15 @@ app.get("/search", async (req, res) => {
       }
     }
 
-    logWithTime(`Busca finalizada. Total de resultados: ${allResults.length}`);
+    logWithTime(`Busca finalizada. Total de resultados: ${results.length}`);
+    
     await browser.close();
     logWithTime("Navegador fechado com sucesso");
+
+    return res.json({
+      total: results.length,
+      results: results
+    });
 
   } catch (error) {
     logWithTime(`Erro durante a execução: ${error.message}`);
@@ -392,7 +346,7 @@ app.get("/search", async (req, res) => {
       await browser.close();
       logWithTime("Navegador fechado após erro");
     }
-    // Não precisa retornar erro pois já respondemos no início
+    return res.status(500).json({ error: error.message });
   }
 });
 
