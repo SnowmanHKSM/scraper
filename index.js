@@ -9,8 +9,8 @@ puppeteer.use(StealthPlugin());
 const app = express();
 app.use(cors());
 
-// Configuração do webhook do n8n
-const N8N_WEBHOOK = process.env.N8N_WEBHOOK || 'http://localhost:5678/webhook/places';
+// URL do webhook no Railway
+const N8N_WEBHOOK = 'https://scraper-production-87ef.up.railway.app/webhook/places';
 const BATCH_SIZE = 10;
 
 async function sendToN8N(batch, query, batchNumber) {
@@ -21,7 +21,7 @@ async function sendToN8N(batch, query, batchNumber) {
       results: batch,
       timestamp: new Date().toISOString()
     });
-    console.log(`[${new Date().toLocaleTimeString()}] Lote ${batchNumber} enviado para n8n`);
+    console.log(`[${new Date().toLocaleTimeString()}] Lote ${batchNumber} enviado para n8n (${batch.length} resultados)`);
   } catch (error) {
     console.error(`Erro ao enviar lote ${batchNumber} para n8n:`, error.message);
   }
