@@ -9,7 +9,6 @@ app.use(express.json());
 
 const RATE_LIMIT_DELAY = 2000;
 const MAX_RETRIES = 3;
-const BATCH_SIZE = 10;
 
 let browser = null;
 let page = null;
@@ -30,6 +29,7 @@ async function initBrowser() {
         "--window-size=1920x1080",
         "--disable-blink-features=AutomationControlled",
         "--disable-extensions",
+        "--ignore-certificate-errors",  // Ignorar erros de certificado
       ],
     });
 
@@ -47,7 +47,6 @@ async function initBrowser() {
   }
 }
 
-// Middleware para CORS e headers de segurança
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -135,13 +134,12 @@ app.post("/clear-cache", (req, res) => {
   res.json({ success: true, message: "Cache limpo com sucesso" });
 });
 
+// Endpoint principal que retorna todos os resultados
 app.get("/search", async (req, res) => {
   const searchTerm = req.query.term;
-  const startIndex = parseInt(req.query.start) || 0;
-  const batchSize = parseInt(req.query.batch_size) || BATCH_SIZE;
 
   if (!searchTerm) {
-    return res.status(400).json({ error: "O parâmetro 'term' é obrigatório." });
+    return res.status(400).json([]);  // Retorna array vazio em caso de erro
   }
 
   try {
@@ -153,11 +151,9 @@ app.get("/search", async (req, res) => {
     }
 
     const results = searchResults.get(searchTerm);
-    const batch = results.slice(startIndex, startIndex + batchSize);
-    const hasMore = startIndex + batchSize < results.length;
 
     // Formato específico para o n8n
-    const response = batch.map(item => ({
+    const response = results.map(item => ({
       json: {
         name: item.name,
         address: item.address,
@@ -166,8 +162,8 @@ app.get("/search", async (req, res) => {
       }
     }));
 
-    // Se não houver mais resultados, retorna array vazio para o n8n parar
-    if (!hasMore) {
+    // Retorna array vazio se não houver resultados
+    if (response.length === 0) {
       res.json([]);
     } else {
       res.json(response);
@@ -175,11 +171,14 @@ app.get("/search", async (req, res) => {
 
   } catch (error) {
     console.error(`Erro durante a execução:`, error);
-    res.status(500).json([]);  // Retorna array vazio em caso de erro para o n8n parar
+    res.status(500).json([]); // Retorna array vazio em caso de erro
   }
 });
 
-// Graceful shutdown
+app.get("/search-all", async (req, res) => {
+  res.redirect(`/search?${new URLSearchParams(req.query)}`);
+});
+
 process.on("SIGINT", async () => {
   if (browser) await browser.close();
   process.exit();
