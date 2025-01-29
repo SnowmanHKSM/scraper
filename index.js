@@ -1,12 +1,15 @@
 const express = require("express");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+const axios = require('axios');
 puppeteer.use(StealthPlugin());
 
 const app = express();
 
 const RATE_LIMIT_DELAY = 2000;
 const MAX_RETRIES = 3;
+const BATCH_SIZE = 15;
+const N8N_WEBHOOK_URL = 'http://localhost:5678/webhook/google-maps-scraper'; // Ajuste para sua URL do n8n
 
 function getTimestamp() {
   return new Date().toLocaleTimeString("pt-BR");
@@ -18,6 +21,18 @@ function logWithTime(message) {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+async function sendToN8N(batch, searchTerm) {
+  try {
+    await axios.post(N8N_WEBHOOK_URL, {
+      searchTerm,
+      results: batch
+    });
+    logWithTime(`Enviado lote de ${batch.length} resultados para n8n`);
+  } catch (error) {
+    logWithTime(`Erro ao enviar para n8n: ${error.message}`);
+  }
+}
+
 app.use(express.json());
 
 app.get("/", (req, res) => {
@@ -27,6 +42,7 @@ app.get("/", (req, res) => {
 app.get("/search", async (req, res) => {
   const searchTerm = req.query.term;
   const maxResults = parseInt(req.query.max) || 100;
+  const startIndex = parseInt(req.query.start) || 0;
 
   if (!searchTerm) {
     return res.status(400).json({ error: "O parâmetro 'term' é obrigatório." });
@@ -231,6 +247,13 @@ app.get("/search", async (req, res) => {
               processedItems.add(cardId);
               processedCount++;
               logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
+
+              // Verifica se completou um lote de 15 resultados
+              if (results.length % BATCH_SIZE === 0) {
+                const startIndex = results.length - BATCH_SIZE;
+                const batch = results.slice(startIndex);
+                await sendToN8N(batch, searchTerm);
+              }
             } else {
               logWithTime(`Item duplicado ignorado: ${details.name}`);
             }
@@ -327,12 +350,27 @@ app.get("/search", async (req, res) => {
     }
 
     logWithTime(`Busca finalizada. Total de resultados: ${results.length}`);
+    
+    // Envia o último lote caso haja resultados restantes
+    const remainingCount = results.length % BATCH_SIZE;
+    if (remainingCount > 0) {
+      const startIndex = results.length - remainingCount;
+      const batch = results.slice(startIndex);
+      await sendToN8N(batch, searchTerm);
+    }
+    
     await browser.close();
     logWithTime("Navegador fechado com sucesso");
 
+    // Retorna apenas o lote atual de 15 resultados
+    const currentBatch = results.slice(startIndex, startIndex + BATCH_SIZE);
+    const hasMore = startIndex + BATCH_SIZE < results.length;
+
     return res.json({
       total: results.length,
-      results: results
+      currentBatch,
+      hasMore,
+      nextStartIndex: hasMore ? startIndex + BATCH_SIZE : null
     });
 
   } catch (error) {
