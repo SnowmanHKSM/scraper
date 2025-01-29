@@ -4,15 +4,14 @@ const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 puppeteer.use(StealthPlugin());
 
 const app = express();
-
 const RATE_LIMIT_DELAY = 2000;
 const MAX_RETRIES = 3;
-const BATCH_SIZE = 10; // Define o tamanho do lote de dados
+const BATCH_SIZE = 10;
 
-let browser = null; // Manter uma única instância do navegador
+let browser = null;
 let page = null;
+let processedItems = new Set(); // Movido para escopo global para manter entre requisições
 
-// 🔥 Função sleep corrigida
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function initBrowser() {
@@ -26,8 +25,6 @@ async function initBrowser() {
         "--disable-accelerated-2d-canvas",
         "--disable-gpu",
         "--window-size=1920x1080",
-        "--disable-blink-features=AutomationControlled",
-        "--disable-extensions",
       ],
     });
 
@@ -43,36 +40,38 @@ async function initBrowser() {
 }
 
 async function processSearch(searchTerm, startIndex, batchSize) {
-  await initBrowser(); // Garante que o navegador está aberto
+  await initBrowser();
 
   const url = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}`;
   if (startIndex === 0) {
     await page.goto(url, { waitUntil: "networkidle2" });
+    processedItems.clear(); // Limpa os itens processados apenas quando começa uma nova busca
   }
 
   const results = [];
-  let processedItems = new Set();
 
   async function processVisibleCards() {
     try {
       await page.waitForSelector(".Nv2PK", { timeout: 5000 });
-
       const cards = await page.$$(".Nv2PK");
       console.log(`Encontrados ${cards.length} cards visíveis`);
 
-      let seenCards = new Set();
+      let processedInThisBatch = 0;
 
-      for (let i = startIndex; i < cards.length && results.length < batchSize; i++) {
+      for (let i = 0; i < cards.length && processedInThisBatch < batchSize; i++) {
         try {
-          const cardId = await page.evaluate((card) => card.textContent.trim(), cards[i]);
+          const cardId = await page.evaluate((card) => {
+            const nameElement = card.querySelector('div[role="heading"]') || 
+                              card.querySelector('.fontHeadlineSmall');
+            return nameElement ? nameElement.textContent.trim() : null;
+          }, cards[i]);
 
-          if (!cardId || processedItems.has(cardId) || seenCards.has(cardId)) {
+          if (!cardId || processedItems.has(cardId)) {
             continue;
           }
 
-          seenCards.add(cardId);
           await cards[i].click();
-          await sleep(2000); // 🔥 Sleep corrigido
+          await sleep(2000);
 
           const details = await page.evaluate(() => {
             const getTextContent = (selectors) => {
@@ -96,6 +95,7 @@ async function processSearch(searchTerm, startIndex, batchSize) {
           if (!results.some((result) => result.name === details.name && result.address === details.address)) {
             results.push(details);
             processedItems.add(cardId);
+            processedInThisBatch++;
             console.log(`Dados capturados: ${JSON.stringify(details)}`);
           }
 
@@ -106,39 +106,67 @@ async function processSearch(searchTerm, startIndex, batchSize) {
           continue;
         }
       }
+
+      return processedInThisBatch;
     } catch (error) {
       console.log(`Erro ao processar cards: ${error.message}`);
+      return 0;
     }
   }
 
   async function scrollPage() {
     try {
-      await page.evaluate(() => {
+      const previousHeight = await page.evaluate(() => {
         const feed = document.querySelector('div[role="feed"]');
         if (feed) {
-          feed.scrollBy(0, feed.scrollHeight);
+          const height = feed.scrollHeight;
+          feed.scrollBy(0, height);
+          return height;
         }
+        return 0;
       });
+      
       await sleep(3000);
+      
+      const newHeight = await page.evaluate(() => {
+        const feed = document.querySelector('div[role="feed"]');
+        return feed ? feed.scrollHeight : 0;
+      });
+      
+      return newHeight > previousHeight;
     } catch (error) {
       console.log(`Erro ao rolar página: ${error.message}`);
+      return false;
     }
   }
 
-  for (let i = 0; i < Math.ceil(startIndex / batchSize); i++) {
-    console.log(`Rolagem ${i + 1}`);
-    await scrollPage();
+  // Rola até encontrar novos resultados ou atingir o limite
+  let scrollCount = 0;
+  const maxScrolls = 10;
+  
+  while (results.length < batchSize && scrollCount < maxScrolls) {
+    console.log(`Rolagem ${scrollCount + 1}`);
+    const hasMore = await scrollPage();
+    await processVisibleCards();
+    
+    if (!hasMore) {
+      break;
+    }
+    
+    scrollCount++;
   }
 
-  await processVisibleCards();
+  const next = results.length === batchSize
+    ? `/search?term=${encodeURIComponent(searchTerm)}&start=${startIndex + batchSize}&batch_size=${batchSize}`
+    : null;
 
-  // Criando link de próxima página para n8n continuar a busca
-  const next =
-    results.length === batchSize
-      ? `https://scraper-production-87ef.up.railway.app/search?term=${searchTerm}&start=${startIndex + batchSize}&batch_size=${batchSize}`
-      : null;
-
-  return { start: startIndex, batch_size: batchSize, results, next };
+  return { 
+    start: startIndex, 
+    batch_size: batchSize, 
+    results,
+    next,
+    total_processed: processedItems.size
+  };
 }
 
 app.get("/search", async (req, res) => {
