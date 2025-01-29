@@ -5,10 +5,20 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
 
 WORKDIR /app
 
+# Copiando arquivos de dependências
 COPY package*.json ./
-RUN npm install
 
+# Instalando dependências com --unsafe-perm
+RUN npm install --unsafe-perm=true
+
+# Copiando resto dos arquivos
 COPY . .
+
+# Ajustando permissões
+RUN chown -R pptruser:pptruser /app
+
+# Trocando para usuário não-root
+USER pptruser
 
 EXPOSE 3000
 
