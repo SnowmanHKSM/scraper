@@ -1,21 +1,43 @@
 const express = require("express");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+const cors = require('cors');
 puppeteer.use(StealthPlugin());
 
 const app = express();
+
+// Configurações CORS
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Connection', 'Keep-Alive'],
+  credentials: true,
+  maxAge: 86400
+}));
+
 app.use(express.json());
 
 // Configurações
 const RATE_LIMIT_DELAY = 2000;
 const MAX_RETRIES = 3;
-const TIMEOUT = 40 * 60 * 1000; // 40 minutos em milissegundos
+const TIMEOUT = 45 * 60 * 1000; // 45 minutos em milissegundos
 
-// Configurar timeout do servidor
+// Configurar headers padrão
 app.use((req, res, next) => {
+  // Headers para manter a conexão viva
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Keep-Alive', 'timeout=900');
+  
+  // Headers de segurança
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  
+  // Configurar timeout da resposta
   res.setTimeout(TIMEOUT, () => {
     logWithTime('Requisição ainda em processamento...');
   });
+  
   next();
 });
 
@@ -377,6 +399,8 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 
 // Configurar timeout do servidor
 server.timeout = TIMEOUT;
+server.keepAliveTimeout = 910 * 1000; // Maior que o timeout do n8n
+server.headersTimeout = 915 * 1000; // Maior que o keepAliveTimeout
 
 // Tratamento de erros do servidor
 server.on('error', (error) => {
