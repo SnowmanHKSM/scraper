@@ -21,6 +21,6 @@ RUN chown -R pptruser:pptruser /app
 # Volta para o usuário não-root
 USER pptruser
 
-EXPOSE 3000
+EXPOSE 8080
 
 CMD ["node", "index.js"]
