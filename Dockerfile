@@ -3,6 +3,15 @@ FROM ghcr.io/puppeteer/puppeteer:21.7.0
 # Troca para root para instalar as dependências
 USER root
 
+# Remove arquivos de lista duplicados do Google
+RUN rm -f /etc/apt/sources.list.d/google-chrome.list \
+    /etc/apt/sources.list.d/google.list
+
+# Adiciona a chave do Google e configura o repositório
+RUN apt-get update && apt-get install -y wget gnupg2 \
+    && wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+
 # Instala dependências necessárias
 RUN apt-get update && apt-get install -y \
     xvfb \
