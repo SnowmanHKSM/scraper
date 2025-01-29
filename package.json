@@ -2,10 +2,9 @@
   "name": "google-maps-scraper",
   "version": "1.0.0",
   "description": "Google Maps Business Scraper",
-  "main": "proxy.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node proxy.js",
-    "dev": "node proxy.js"
+    "start": "node index.js"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -13,12 +12,8 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "multer": "^1.4.5-lts.1",
-    "puppeteer": "^24.1.1",
+    "puppeteer": "^21.7.0",
     "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
-    "selenium-webdriver": "^4.16.0",
-    "ws": "^8.16.0",
-    "http-proxy-middleware": "^3.0.0"
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }
