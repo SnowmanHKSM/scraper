@@ -399,11 +399,10 @@ app.get("/search", async (req, res) => {
   }
 });
 
-// Inicia o servidor
-const PORT = process.env.PORT || 3000;
-const server = http.createServer(app);
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
+// Inicia o servidor na porta 3001 (interna)
+const PORT = process.env.INTERNAL_PORT || 3001;
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Servidor interno rodando na porta ${PORT}`);
   console.log(`Para fazer uma busca, acesse: http://localhost:${PORT}/search?term=sua+busca`);
 });
 
