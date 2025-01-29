@@ -5,11 +5,11 @@ const axios = require('axios');
 puppeteer.use(StealthPlugin());
 
 const app = express();
-
 const RATE_LIMIT_DELAY = 2000;
 const MAX_RETRIES = 3;
-const BATCH_SIZE = 15;
-const N8N_WEBHOOK_URL = 'http://localhost:5678/webhook/google-maps-scraper'; // Ajuste para sua URL do n8n
+
+// URL do webhook do n8n
+const N8N_WEBHOOK_URL = 'https://primary-production-270f.up.railway.app/webhook-test/da3a1250-7da8-4193-9e05-3c7e9bc45ba9';
 
 function getTimestamp() {
   return new Date().toLocaleTimeString("pt-BR");
@@ -21,19 +21,39 @@ function logWithTime(message) {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function sendBatchToN8N(batch, searchTerm) {
+async function sendResultsToN8N(results, searchTerm, scrollNumber, isLastBatch) {
   try {
     await axios.post(N8N_WEBHOOK_URL, {
       searchTerm,
-      results: batch
+      scrollNumber,
+      results,
+      isLastBatch,
+      totalResults: results.length,
+      timestamp: new Date().toISOString()
     });
-    logWithTime(`Lote de ${batch.length} resultados enviado para n8n`);
+    logWithTime(`Lote #${scrollNumber} com ${results.length} resultados enviado para n8n`);
+    return true;
   } catch (error) {
-    logWithTime(`Erro ao enviar lote para n8n: ${error.message}`);
+    logWithTime(`Erro ao enviar lote #${scrollNumber} para n8n: ${error.message}`);
+    // Tenta novamente após um breve delay
+    await sleep(2000);
+    try {
+      await axios.post(N8N_WEBHOOK_URL, {
+        searchTerm,
+        scrollNumber,
+        results,
+        isLastBatch,
+        totalResults: results.length,
+        timestamp: new Date().toISOString()
+      });
+      logWithTime(`Lote #${scrollNumber} enviado com sucesso na segunda tentativa`);
+      return true;
+    } catch (retryError) {
+      logWithTime(`Falha definitiva ao enviar lote #${scrollNumber}: ${retryError.message}`);
+      return false;
+    }
   }
 }
-
-app.use(express.json());
 
 app.get("/", (req, res) => {
   res.send("Bem-vindo ao Scraper Google Maps");
@@ -42,20 +62,29 @@ app.get("/", (req, res) => {
 app.get("/search", async (req, res) => {
   const searchTerm = req.query.term;
   const maxResults = parseInt(req.query.max) || 100;
-  const startIndex = parseInt(req.query.start) || 0;
 
   if (!searchTerm) {
     return res.status(400).json({ error: "O parâmetro 'term' é obrigatório." });
   }
 
+  // Responde imediatamente que começou o scraping
+  res.json({ 
+    status: "started", 
+    message: `Iniciando scraping para: ${searchTerm}. Os resultados serão enviados via webhook.` 
+  });
+
   let browser;
+  const allResults = [];
+  let processedItems = new Set();
+  let currentScrollResults = [];
+  let scrollNumber = 0;
 
   try {
     logWithTime(`Iniciando nova busca por: ${searchTerm}`);
     logWithTime("Iniciando navegador...");
 
     browser = await puppeteer.launch({
-      headless: "new",
+      headless: false,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -63,8 +92,6 @@ app.get("/search", async (req, res) => {
         "--disable-accelerated-2d-canvas",
         "--disable-gpu",
         "--window-size=1920x1080",
-        "--disable-blink-features=AutomationControlled",
-        "--disable-extensions",
       ],
     });
 
@@ -244,17 +271,11 @@ app.get("/search", async (req, res) => {
             });
 
             if (!isDuplicate && details.name !== "Nome não encontrado") {
-              results.push(details);
-              currentBatch.push(details);
+              currentScrollResults.push(details);
+              allResults.push(details);
               processedItems.add(cardId);
               processedCount++;
               logWithTime(`Dados capturados: ${JSON.stringify(details)}`);
-
-              // Verifica se completou um lote de 15 resultados
-              if (currentBatch.length >= BATCH_SIZE) {
-                await sendBatchToN8N(currentBatch, searchTerm);
-                currentBatch = []; // Limpa o lote atual
-              }
             } else {
               logWithTime(`Item duplicado ignorado: ${details.name}`);
             }
@@ -273,6 +294,17 @@ app.get("/search", async (req, res) => {
             logWithTime(`Erro ao processar card: ${cardError.message}`);
             continue;
           }
+        }
+
+        // Após processar todos os cards visíveis, envia os resultados desta rolagem
+        if (currentScrollResults.length > 0) {
+          scrollNumber++;
+          const isLastBatch = !hasMoreResults || allResults.length >= maxResults;
+          const sent = await sendResultsToN8N(currentScrollResults, searchTerm, scrollNumber, isLastBatch);
+          if (!sent) {
+            logWithTime(`Não foi possível enviar o lote #${scrollNumber}. Continuando...`);
+          }
+          currentScrollResults = []; // Limpa para a próxima rolagem
         }
 
         return processedCount;
@@ -350,20 +382,9 @@ app.get("/search", async (req, res) => {
       }
     }
 
-    logWithTime(`Busca finalizada. Total de resultados: ${results.length}`);
-    
-    // Envia o último lote se houver resultados restantes
-    if (currentBatch.length > 0) {
-      await sendBatchToN8N(currentBatch, searchTerm);
-    }
-
+    logWithTime(`Busca finalizada. Total de resultados: ${allResults.length}`);
     await browser.close();
     logWithTime("Navegador fechado com sucesso");
-
-    return res.json({
-      total: results.length,
-      results: results
-    });
 
   } catch (error) {
     logWithTime(`Erro durante a execução: ${error.message}`);
@@ -371,7 +392,7 @@ app.get("/search", async (req, res) => {
       await browser.close();
       logWithTime("Navegador fechado após erro");
     }
-    return res.status(500).json({ error: error.message });
+    // Não precisa retornar erro pois já respondemos no início
   }
 });
 
